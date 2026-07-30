@@ -5,8 +5,11 @@
 
 import SwiftUI
 
+@MainActor
 struct ApplicationOverviewView: View {
     let application: ApplicationSnapshot
+    var nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot] = MockMonitoringData.nodes(for:)
+    var loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot] = { application in MockMonitoringData.nodes(for: application) }
 
     var body: some View {
         ScrollView {
@@ -55,7 +58,11 @@ struct ApplicationOverviewView: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                InfrastructureDetailView(application: application)
+                InfrastructureDetailView(
+                    application: application,
+                    initialNodes: nodesProvider(application),
+                    loadNodes: { await loadNodes(application) }
+                )
             } label: {
                 OverviewRouteRow(
                     title: "Infrastructure",

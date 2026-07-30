@@ -7,9 +7,13 @@ import SwiftUI
 
 struct InfrastructureDetailView: View {
     let application: ApplicationSnapshot
+    let initialNodes: [NodeSnapshot]
+    var loadNodes: (() async -> [NodeSnapshot])?
+
+    @State private var loadedNodes: [NodeSnapshot] = []
 
     private var nodes: [NodeSnapshot] {
-        MockMonitoringData.nodes(for: application)
+        loadedNodes.isEmpty ? initialNodes : loadedNodes
     }
 
     var body: some View {
@@ -68,11 +72,19 @@ struct InfrastructureDetailView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Infrastructure")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if let loadNodes {
+                loadedNodes = await loadNodes()
+            }
+        }
     }
 }
 
 #Preview {
     NavigationStack {
-        InfrastructureDetailView(application: MockMonitoringData.applications[0])
+        InfrastructureDetailView(
+            application: MockMonitoringData.applications[0],
+            initialNodes: MockMonitoringData.nodes(for: MockMonitoringData.applications[0])
+        )
     }
 }

@@ -5,8 +5,11 @@
 
 import SwiftUI
 
+@MainActor
 struct InfrastructureHealthDashboardView: View {
     let applications: [ApplicationSnapshot]
+    let nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot]
+    let loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot]
 
     @State private var selectedApplicationID: UUID?
 
@@ -37,6 +40,11 @@ struct InfrastructureHealthDashboardView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Infra Health")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: selectedApplication?.id) {
+            if let selectedApplication {
+                _ = await loadNodes(selectedApplication)
+            }
+        }
     }
 
     private var bindingSelection: Binding<UUID?> {
@@ -97,7 +105,7 @@ struct InfrastructureHealthDashboardView: View {
     }
 
     private func nodeSection(for application: ApplicationSnapshot) -> some View {
-        let nodes = MockMonitoringData.nodes(for: application)
+        let nodes = nodesProvider(application)
 
         return VStack(alignment: .leading, spacing: 12) {
             Text("Node Performance")
@@ -135,6 +143,10 @@ struct InfrastructureHealthDashboardView: View {
 
 #Preview {
     NavigationStack {
-        InfrastructureHealthDashboardView(applications: MockMonitoringData.applications)
+        InfrastructureHealthDashboardView(
+            applications: MockMonitoringData.applications,
+            nodesProvider: { _ in [] },
+            loadNodes: { _ in [] }
+        )
     }
 }

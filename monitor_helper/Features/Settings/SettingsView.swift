@@ -6,6 +6,9 @@
 import SwiftUI
 
 struct SettingsView: View {
+    var isUsingLiveData = false
+    var signOut: (() -> Void)?
+
     var body: some View {
         List {
             Section("Monitoring") {
@@ -16,7 +19,15 @@ struct SettingsView: View {
 
             Section("Access") {
                 SettingsRow(title: "Mode", value: "Read only", symbolName: "lock")
-                SettingsRow(title: "Source", value: "Supabase", symbolName: "externaldrive.connected.to.line.below")
+                SettingsRow(title: "Source", value: isUsingLiveData ? "Supabase Live" : "Mock Data", symbolName: "externaldrive.connected.to.line.below")
+            }
+
+            if let signOut {
+                Section {
+                    Button("Sign Out", role: .destructive) {
+                        signOut()
+                    }
+                }
             }
 
             Section("About") {

@@ -13,6 +13,19 @@ enum HealthStatus: String, CaseIterable, Identifiable, Hashable {
 
     var id: String { rawValue }
 
+    init(apiValue: String?) {
+        switch apiValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "critical":
+            self = .critical
+        case "warning":
+            self = .warning
+        case "healthy":
+            self = .healthy
+        default:
+            self = .noData
+        }
+    }
+
     var color: Color {
         switch self {
         case .critical:

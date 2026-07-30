@@ -14,8 +14,12 @@ struct MonitorTabView: View {
                 MonitorView(
                     applications: store.applications,
                     selectedTimeRange: $store.selectedTimeRange,
+                    isUsingLiveData: store.isUsingLiveData,
                     isRefreshing: store.isRefreshing,
-                    refresh: store.refresh
+                    errorMessage: store.errorMessage,
+                    refresh: store.refresh,
+                    nodesProvider: store.nodes(for:),
+                    loadNodes: store.loadNodes(for:)
                 )
             }
             .tabItem {
@@ -26,8 +30,12 @@ struct MonitorTabView: View {
                 DashboardView(
                     applications: store.applications,
                     selectedTimeRange: $store.selectedTimeRange,
+                    isUsingLiveData: store.isUsingLiveData,
                     isRefreshing: store.isRefreshing,
-                    refresh: store.refresh
+                    errorMessage: store.errorMessage,
+                    refresh: store.refresh,
+                    nodesProvider: store.nodes(for:),
+                    loadNodes: store.loadNodes(for:)
                 )
             }
             .tabItem {
@@ -35,7 +43,10 @@ struct MonitorTabView: View {
             }
 
             NavigationStack {
-                SettingsView()
+                SettingsView(
+                    isUsingLiveData: store.isUsingLiveData,
+                    signOut: store.signOut
+                )
             }
             .tabItem {
                 Label("Settings", systemImage: "gearshape")

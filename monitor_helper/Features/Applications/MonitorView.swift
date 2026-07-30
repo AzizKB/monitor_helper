@@ -5,11 +5,16 @@
 
 import SwiftUI
 
+@MainActor
 struct MonitorView: View {
     let applications: [ApplicationSnapshot]
     @Binding var selectedTimeRange: MonitoringTimeRange
+    let isUsingLiveData: Bool
     let isRefreshing: Bool
+    let errorMessage: String?
     let refresh: () async -> Void
+    let nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot]
+    let loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot]
 
     private var sortedApplications: [ApplicationSnapshot] {
         applications.sorted {
@@ -33,6 +38,7 @@ struct MonitorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 fleetSummary
+                dataSourceBanner
 
                 Text("Applications")
                     .font(.headline)
@@ -54,7 +60,11 @@ struct MonitorView: View {
             await refresh()
         }
         .navigationDestination(for: ApplicationSnapshot.self) { application in
-            ApplicationOverviewView(application: application)
+            ApplicationOverviewView(
+                application: application,
+                nodesProvider: nodesProvider,
+                loadNodes: loadNodes
+            )
         }
     }
 
@@ -97,6 +107,35 @@ struct MonitorView: View {
     private func count(_ status: HealthStatus) -> Int {
         applications.filter { $0.health == status }.count
     }
+
+    private var dataSourceBanner: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: isUsingLiveData ? "checkmark.icloud.fill" : "exclamationmark.icloud.fill")
+                    .foregroundStyle(isUsingLiveData ? .green : .orange)
+
+                Text(isUsingLiveData ? "Supabase Live" : "Mock Data")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+
+                Spacer()
+
+                Text("\(applications.count) apps")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let errorMessage, !isUsingLiveData {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background((isUsingLiveData ? Color.green : Color.orange).opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
 }
 
 private struct StatusCountPill: View {
@@ -127,8 +166,12 @@ private struct StatusCountPill: View {
         MonitorView(
             applications: MockMonitoringData.applications,
             selectedTimeRange: .constant(.oneHour),
+            isUsingLiveData: false,
             isRefreshing: false,
-            refresh: {}
+            errorMessage: nil,
+            refresh: {},
+            nodesProvider: { _ in [] },
+            loadNodes: { _ in [] }
         )
     }
 }

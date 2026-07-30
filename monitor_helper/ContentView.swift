@@ -11,10 +11,16 @@ struct ContentView: View {
     @State private var store = MonitoringStore()
 
     var body: some View {
-        MonitorTabView(store: store)
-            .task {
-                await store.bootstrap()
+        Group {
+            if store.isAuthenticated {
+                MonitorTabView(store: store)
+            } else {
+                AuthenticationView(store: store)
             }
+        }
+        .task {
+            await store.bootstrap()
+        }
     }
 }
 

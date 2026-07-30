@@ -5,11 +5,16 @@
 
 import SwiftUI
 
+@MainActor
 struct DashboardView: View {
     let applications: [ApplicationSnapshot]
     @Binding var selectedTimeRange: MonitoringTimeRange
+    let isUsingLiveData: Bool
     let isRefreshing: Bool
+    let errorMessage: String?
     let refresh: () async -> Void
+    let nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot]
+    let loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot]
 
     var body: some View {
         ScrollView {
@@ -32,7 +37,11 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
 
                 NavigationLink {
-                    InfrastructureHealthDashboardView(applications: applications)
+                    InfrastructureHealthDashboardView(
+                        applications: applications,
+                        nodesProvider: nodesProvider,
+                        loadNodes: loadNodes
+                    )
                 } label: {
                     DashboardRouteCard(
                         title: "Infrastructure Health",
@@ -67,6 +76,20 @@ struct DashboardView: View {
             Text("Use dashboards when you want to observe trends instead of inspecting one application from Monitor.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+
+            Label(
+                isUsingLiveData ? "Supabase Live • \(applications.count) apps" : "Mock Data • \(applications.count) apps",
+                systemImage: isUsingLiveData ? "checkmark.icloud.fill" : "exclamationmark.icloud.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(isUsingLiveData ? .green : .orange)
+
+            if let errorMessage, !isUsingLiveData {
+                Text(errorMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if isRefreshing {
                 Label("Refreshing cached monitoring snapshot", systemImage: "arrow.triangle.2.circlepath")
@@ -120,8 +143,12 @@ private struct DashboardRouteCard: View {
         DashboardView(
             applications: MockMonitoringData.applications,
             selectedTimeRange: .constant(.oneHour),
+            isUsingLiveData: false,
             isRefreshing: false,
-            refresh: {}
+            errorMessage: nil,
+            refresh: {},
+            nodesProvider: { _ in [] },
+            loadNodes: { _ in [] }
         )
     }
 }
