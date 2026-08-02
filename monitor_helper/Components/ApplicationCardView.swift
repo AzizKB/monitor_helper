@@ -63,10 +63,10 @@ struct ApplicationCardView: View {
 
             HStack(spacing: 14) {
                 Label("\(application.activeIncidentCount) active alarms", systemImage: "bell")
-                Label(application.health == .noData ? "Configuration pending" : "Mobile summary", systemImage: "iphone")
+                Label(application.freshnessSummary, systemImage: application.isStale ? "clock.badge.exclamationmark" : "iphone")
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(application.isStale ? .orange : .secondary)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

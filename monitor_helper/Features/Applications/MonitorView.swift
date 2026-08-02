@@ -15,10 +15,20 @@ struct MonitorView: View {
     let refresh: () async -> Void
     let nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot]
     let loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot]
+    let incidentsProvider: (ApplicationSnapshot) -> [IncidentSnapshot]
+    let loadIncidents: (ApplicationSnapshot) async -> [IncidentSnapshot]
 
     private var sortedApplications: [ApplicationSnapshot] {
         applications.sorted {
             if $0.health.sortPriority == $1.health.sortPriority {
+                if $0.hasApplicationMetrics != $1.hasApplicationMetrics {
+                    return $0.hasApplicationMetrics
+                }
+
+                if $0.lastUpdatedAt != $1.lastUpdatedAt {
+                    return ($0.lastUpdatedAt ?? .distantPast) > ($1.lastUpdatedAt ?? .distantPast)
+                }
+
                 return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
             }
 
@@ -30,8 +40,22 @@ struct MonitorView: View {
         applications.filter { $0.health == .critical || $0.health == .warning }.count
     }
 
-    private var lastUpdatedAt: Date? {
-        applications.compactMap(\.lastUpdatedAt).max()
+    private var lastSuccessfulSyncAt: Date? {
+        applications.compactMap(\.lastSuccessfulSyncAt).max()
+    }
+
+    private var staleMetricApplications: [ApplicationSnapshot] {
+        applications.filter { $0.isStale && $0.hasApplicationMetrics }
+    }
+
+    private var staleMetricApplicationCount: Int {
+        staleMetricApplications.count
+    }
+
+    private var oldestStaleMetricAgeMinutes: Int? {
+        staleMetricApplications
+            .compactMap(\.dataAgeMinutes)
+            .max()
     }
 
     var body: some View {
@@ -63,7 +87,9 @@ struct MonitorView: View {
             ApplicationOverviewView(
                 application: application,
                 nodesProvider: nodesProvider,
-                loadNodes: loadNodes
+                loadNodes: loadNodes,
+                incidentsProvider: incidentsProvider,
+                loadIncidents: loadIncidents
             )
         }
     }
@@ -77,7 +103,7 @@ struct MonitorView: View {
                         .fontWeight(.semibold)
 
                     Label(
-                        isRefreshing ? "Refreshing..." : "\(selectedTimeRange.displayName) • Updated \(MetricFormatter.relativeTime(lastUpdatedAt))",
+                        isRefreshing ? "Refreshing..." : "\(selectedTimeRange.displayName) • Synced \(MetricFormatter.relativeTime(lastSuccessfulSyncAt))",
                         systemImage: isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise.circle"
                     )
                     .font(.subheadline)
@@ -111,10 +137,10 @@ struct MonitorView: View {
     private var dataSourceBanner: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: isUsingLiveData ? "checkmark.icloud.fill" : "exclamationmark.icloud.fill")
-                    .foregroundStyle(isUsingLiveData ? .green : .orange)
+                Image(systemName: dataSourceSymbol)
+                    .foregroundStyle(dataSourceColor)
 
-                Text(isUsingLiveData ? "Supabase Live" : "Mock Data")
+                Text(dataSourceTitle)
                     .font(.subheadline)
                     .fontWeight(.semibold)
 
@@ -125,7 +151,15 @@ struct MonitorView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let errorMessage, !isUsingLiveData {
+            if isUsingLiveData, staleMetricApplicationCount > 0 {
+                Text(staleSummaryText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if isRefreshing && !isUsingLiveData {
+                Text("Loading the latest monitoring snapshot from Supabase.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let errorMessage, !isUsingLiveData {
                 Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -133,8 +167,52 @@ struct MonitorView: View {
             }
         }
         .padding(12)
-        .background((isUsingLiveData ? Color.green : Color.orange).opacity(0.1))
+        .background(dataSourceColor.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+
+    private var dataSourceTitle: String {
+        if isUsingLiveData {
+            if staleMetricApplicationCount > 0 {
+                return "Supabase Live • Stale Snapshot"
+            }
+
+            return isRefreshing ? "Refreshing Supabase" : "Supabase Live"
+        }
+
+        return isRefreshing ? "Loading Supabase" : "Mock Data"
+    }
+
+    private var dataSourceSymbol: String {
+        if isUsingLiveData {
+            if staleMetricApplicationCount > 0 {
+                return "clock.badge.exclamationmark"
+            }
+
+            return "checkmark.icloud.fill"
+        }
+
+        return isRefreshing ? "icloud.and.arrow.down.fill" : "exclamationmark.icloud.fill"
+    }
+
+    private var dataSourceColor: Color {
+        if isUsingLiveData {
+            if staleMetricApplicationCount > 0 {
+                return .orange
+            }
+
+            return .green
+        }
+
+        return isRefreshing ? .blue : .orange
+    }
+
+    private var staleSummaryText: String {
+        if let oldestStaleMetricAgeMinutes {
+            return "\(staleMetricApplicationCount) apps have metric data older than 30 minutes. Oldest snapshot: \(oldestStaleMetricAgeMinutes)m."
+        }
+
+        return "\(staleMetricApplicationCount) apps have metric data older than 30 minutes."
     }
 }
 
@@ -171,7 +249,9 @@ private struct StatusCountPill: View {
             errorMessage: nil,
             refresh: {},
             nodesProvider: { _ in [] },
-            loadNodes: { _ in [] }
+            loadNodes: { _ in [] },
+            incidentsProvider: { _ in [] },
+            loadIncidents: { _ in [] }
         )
     }
 }

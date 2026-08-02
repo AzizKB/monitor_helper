@@ -30,6 +30,7 @@ struct SupabaseMonitorApplicationDTO: Decodable {
     let responseTimeMs: Double?
     let callsPerMinute: Double?
     let errorsPerMinute: Double?
+    let errorPercentage: Double?
     let worstCpuPercent: Double?
     let worstMemoryPercent: Double?
     let availability: Double?
@@ -55,6 +56,7 @@ struct SupabaseMonitorApplicationDTO: Decodable {
         case responseTimeMs = "response_time_ms"
         case callsPerMinute = "calls_per_minute"
         case errorsPerMinute = "errors_per_minute"
+        case errorPercentage = "error_percentage"
         case worstCpuPercent = "worst_cpu_percent"
         case worstMemoryPercent = "worst_memory_percent"
         case availability
@@ -102,5 +104,27 @@ struct SupabaseChartPointDTO: Decodable {
     enum CodingKeys: String, CodingKey {
         case observedAt = "observed_at"
         case value
+    }
+}
+
+struct SupabaseIncidentDTO: Decodable {
+    let violationID: UUID
+    let applicationID: UUID
+    let name: String
+    let severity: String?
+    let status: String?
+    let description: String?
+    let startTime: String?
+    let durationSeconds: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case violationID = "violation_id"
+        case applicationID = "application_id"
+        case name
+        case severity
+        case status
+        case description
+        case startTime = "start_time"
+        case durationSeconds = "duration_seconds"
     }
 }

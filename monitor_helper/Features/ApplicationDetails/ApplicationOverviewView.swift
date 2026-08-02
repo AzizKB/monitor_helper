@@ -10,6 +10,8 @@ struct ApplicationOverviewView: View {
     let application: ApplicationSnapshot
     var nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot] = MockMonitoringData.nodes(for:)
     var loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot] = { application in MockMonitoringData.nodes(for: application) }
+    var incidentsProvider: (ApplicationSnapshot) -> [IncidentSnapshot] = { _ in [] }
+    var loadIncidents: (ApplicationSnapshot) async -> [IncidentSnapshot] = { _ in [] }
 
     var body: some View {
         ScrollView {
@@ -74,7 +76,11 @@ struct ApplicationOverviewView: View {
             .buttonStyle(.plain)
 
             NavigationLink {
-                IncidentsDetailView(application: application)
+                IncidentsDetailView(
+                    application: application,
+                    initialIncidents: incidentsProvider(application),
+                    loadIncidents: { await loadIncidents(application) }
+                )
             } label: {
                 OverviewRouteRow(
                     title: "Incidents",

@@ -12,17 +12,18 @@ enum SupabaseModelMapper {
         let lastMetricAt = SupabaseDateParser.date(from: dto.latestApplicationMetricAt)
         let lastInfrastructureAt = SupabaseDateParser.date(from: dto.latestInfrastructureMetricAt)
         let lastUpdatedAt = [lastMetricAt, lastInfrastructureAt].compactMap { $0 }.max()
+        let lastSuccessfulSyncAt = SupabaseDateParser.date(from: dto.lastSuccessfulSyncAt)
 
         return ApplicationSnapshot(
             id: dto.applicationID,
             appDynamicsId: dto.appDynamicsID.map(String.init) ?? dto.applicationID.uuidString,
             name: dto.applicationName,
             displayName: dto.displayName ?? dto.applicationName,
-            health: dto.isStale == true ? .noData : overallHealth,
+            health: overallHealth,
             averageResponseTimeMs: dto.responseTimeMs,
             callsPerMinute: dto.callsPerMinute,
             errorsPerMinute: dto.errorsPerMinute,
-            errorPercentage: nil,
+            errorPercentage: dto.errorPercentage,
             activeIncidentCount: dto.activeIncidentCount ?? 0,
             nodesReporting: dto.nodeCount,
             totalNodes: dto.nodeCount,
@@ -31,8 +32,11 @@ enum SupabaseModelMapper {
             worstCpuPercent: dto.worstCpuPercent,
             worstMemoryPercent: dto.worstMemoryPercent,
             availabilityPercent: normalizedAvailability(dto.availability),
-            infrastructureHealth: dto.isStale == true ? .noData : infrastructureHealth,
+            infrastructureHealth: infrastructureHealth,
             lastUpdatedAt: lastUpdatedAt,
+            lastSuccessfulSyncAt: lastSuccessfulSyncAt,
+            isStale: dto.isStale == true,
+            dataAgeMinutes: dto.dataAgeMinutes,
             isFavorite: false
         )
     }
@@ -48,6 +52,19 @@ enum SupabaseModelMapper {
             memoryPercent: dto.memoryPercent,
             availabilityPercent: normalizedAvailability(dto.availability),
             lastUpdatedAt: SupabaseDateParser.date(from: dto.latestMetricAt)
+        )
+    }
+
+    static func incident(from dto: SupabaseIncidentDTO) -> IncidentSnapshot {
+        IncidentSnapshot(
+            id: dto.violationID,
+            applicationID: dto.applicationID,
+            title: dto.name,
+            severity: HealthStatus(apiValue: dto.severity),
+            status: dto.status ?? "Unknown",
+            description: dto.description,
+            startedAt: SupabaseDateParser.date(from: dto.startTime),
+            durationSeconds: dto.durationSeconds
         )
     }
 

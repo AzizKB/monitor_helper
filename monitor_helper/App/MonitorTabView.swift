@@ -19,7 +19,9 @@ struct MonitorTabView: View {
                     errorMessage: store.errorMessage,
                     refresh: store.refresh,
                     nodesProvider: store.nodes(for:),
-                    loadNodes: store.loadNodes(for:)
+                    loadNodes: store.loadNodes(for:),
+                    incidentsProvider: store.incidents(for:),
+                    loadIncidents: store.loadIncidents(for:)
                 )
             }
             .tabItem {
@@ -45,6 +47,10 @@ struct MonitorTabView: View {
             NavigationStack {
                 SettingsView(
                     isUsingLiveData: store.isUsingLiveData,
+                    isRefreshing: store.isRefreshing,
+                    selectedTimeRange: store.selectedTimeRange,
+                    lastLoadedAt: store.lastLoadedAt,
+                    errorMessage: store.errorMessage,
                     signOut: store.signOut
                 )
             }
@@ -53,6 +59,11 @@ struct MonitorTabView: View {
             }
         }
         .tint(AppTheme.accent)
+        .onChange(of: store.selectedTimeRange) { _, _ in
+            Task {
+                await store.refreshForSelectedTimeRange()
+            }
+        }
     }
 }
 

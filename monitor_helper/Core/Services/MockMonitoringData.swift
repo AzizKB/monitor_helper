@@ -27,6 +27,9 @@ enum MockMonitoringData {
             availabilityPercent: 87.5,
             infrastructureHealth: .critical,
             lastUpdatedAt: .now.addingTimeInterval(-90),
+            lastSuccessfulSyncAt: .now.addingTimeInterval(-60),
+            isStale: false,
+            dataAgeMinutes: 2,
             isFavorite: true
         ),
         ApplicationSnapshot(
@@ -49,6 +52,9 @@ enum MockMonitoringData {
             availabilityPercent: 97.2,
             infrastructureHealth: .warning,
             lastUpdatedAt: .now.addingTimeInterval(-170),
+            lastSuccessfulSyncAt: .now.addingTimeInterval(-60),
+            isStale: false,
+            dataAgeMinutes: 3,
             isFavorite: true
         ),
         ApplicationSnapshot(
@@ -71,6 +77,9 @@ enum MockMonitoringData {
             availabilityPercent: 100,
             infrastructureHealth: .healthy,
             lastUpdatedAt: .now.addingTimeInterval(-220),
+            lastSuccessfulSyncAt: .now.addingTimeInterval(-60),
+            isStale: false,
+            dataAgeMinutes: 4,
             isFavorite: false
         ),
         ApplicationSnapshot(
@@ -93,6 +102,9 @@ enum MockMonitoringData {
             availabilityPercent: nil,
             infrastructureHealth: .noData,
             lastUpdatedAt: nil,
+            lastSuccessfulSyncAt: .now.addingTimeInterval(-60),
+            isStale: false,
+            dataAgeMinutes: nil,
             isFavorite: false
         ),
         ApplicationSnapshot(
@@ -115,6 +127,9 @@ enum MockMonitoringData {
             availabilityPercent: 100,
             infrastructureHealth: .healthy,
             lastUpdatedAt: .now.addingTimeInterval(-300),
+            lastSuccessfulSyncAt: .now.addingTimeInterval(-60),
+            isStale: false,
+            dataAgeMinutes: 5,
             isFavorite: false
         )
     ]
@@ -149,8 +164,9 @@ enum MockMonitoringData {
         range: MonitoringTimeRange = .oneHour
     ) -> [PerformanceChartSample] {
         let values = normalizedPerformanceValues(for: application.health, range: range)
-        let start = Date.now.addingTimeInterval(TimeInterval(-range.hours * 60 * 60))
-        let interval = TimeInterval(range.hours * 60 * 60) / TimeInterval(max(values.count - 1, 1))
+        let duration = TimeInterval(range.minutes * 60)
+        let start = Date.now.addingTimeInterval(-duration)
+        let interval = duration / TimeInterval(max(values.count - 1, 1))
 
         return values.enumerated().map { index, point in
             let timestamp = start.addingTimeInterval(Double(index) * interval)
@@ -234,7 +250,23 @@ enum MockMonitoringData {
 
         guard range != .oneHour else { return baseValues }
 
-        return expandedValues(from: baseValues, targetCount: min((range.hours * 2) + 5, 20))
+        let targetCount: Int
+        switch range {
+        case .fifteenMinutes:
+            targetCount = 4
+        case .thirtyMinutes:
+            targetCount = 5
+        case .threeHours:
+            targetCount = 10
+        case .sixHours:
+            targetCount = 14
+        case .twelveHours, .twentyFourHours:
+            targetCount = 20
+        case .oneHour:
+            targetCount = baseValues.count
+        }
+
+        return expandedValues(from: baseValues, targetCount: targetCount)
     }
 
     private static func expandedValues(

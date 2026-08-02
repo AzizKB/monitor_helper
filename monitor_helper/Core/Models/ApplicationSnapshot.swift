@@ -25,7 +25,26 @@ struct ApplicationSnapshot: Identifiable, Hashable {
     let availabilityPercent: Double?
     let infrastructureHealth: HealthStatus
     let lastUpdatedAt: Date?
+    let lastSuccessfulSyncAt: Date?
+    let isStale: Bool
+    let dataAgeMinutes: Int?
     let isFavorite: Bool
+
+    var hasApplicationMetrics: Bool {
+        averageResponseTimeMs != nil || callsPerMinute != nil || errorsPerMinute != nil
+    }
+
+    var freshnessSummary: String {
+        if isStale, let dataAgeMinutes {
+            return "Data stale (\(dataAgeMinutes)m)"
+        }
+
+        if !hasApplicationMetrics {
+            return "Configuration pending"
+        }
+
+        return "Mobile summary"
+    }
 
     var nodeSummary: String {
         guard let nodesReporting, let totalNodes else {

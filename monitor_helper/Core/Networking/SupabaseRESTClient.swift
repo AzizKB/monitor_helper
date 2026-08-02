@@ -8,6 +8,7 @@ import Foundation
 enum SupabaseRESTError: LocalizedError {
     case invalidResponse
     case requestFailed(Int, String)
+    case decodingFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +16,8 @@ enum SupabaseRESTError: LocalizedError {
             return "Supabase returned an invalid response."
         case let .requestFailed(statusCode, message):
             return "Supabase request failed (\(statusCode)): \(message)"
+        case let .decodingFailed(message):
+            return "Supabase response could not be decoded: \(message)"
         }
     }
 }
@@ -45,29 +48,26 @@ struct SupabaseRESTClient {
         return try await perform(request, as: SupabaseAuthSession.self)
     }
 
-    func fetchMonitorApplications(accessToken: String) async throws -> [SupabaseMonitorApplicationDTO] {
-        var components = URLComponents(url: url(path: "/rest/v1/v_monitor_applications"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "select", value: "*")
-        ]
-
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "GET"
+    func fetchMonitorApplications(minutes: Int, accessToken: String) async throws -> [SupabaseMonitorApplicationDTO] {
+        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_monitor_applications"))
+        request.httpMethod = "POST"
         applyReadHeaders(to: &request, accessToken: accessToken)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            MonitorApplicationsRequest(windowMinutes: minutes)
+        )
 
         return try await perform(request, as: [SupabaseMonitorApplicationDTO].self)
     }
 
     func fetchNodes(applicationID: UUID, accessToken: String) async throws -> [SupabaseApplicationNodeDTO] {
-        var components = URLComponents(url: url(path: "/rest/v1/v_application_nodes"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "application_id", value: "eq.\(applicationID.uuidString)"),
-            URLQueryItem(name: "select", value: "*")
-        ]
-
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "GET"
+        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_application_nodes"))
+        request.httpMethod = "POST"
         applyReadHeaders(to: &request, accessToken: accessToken)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            ApplicationNodesRequest(applicationID: applicationID.uuidString)
+        )
 
         return try await perform(request, as: [SupabaseApplicationNodeDTO].self)
     }
@@ -95,6 +95,25 @@ struct SupabaseRESTClient {
         return try await perform(request, as: [SupabaseChartPointDTO].self)
     }
 
+    func fetchIncidents(
+        applicationID: UUID,
+        limit: Int,
+        accessToken: String
+    ) async throws -> [SupabaseIncidentDTO] {
+        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_application_incidents"))
+        request.httpMethod = "POST"
+        applyReadHeaders(to: &request, accessToken: accessToken)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            ApplicationIncidentsRequest(
+                applicationID: applicationID.uuidString,
+                limit: limit
+            )
+        )
+
+        return try await perform(request, as: [SupabaseIncidentDTO].self)
+    }
+
     private func applyReadHeaders(to request: inout URLRequest, accessToken: String) {
         request.setValue(publishableKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -119,7 +138,21 @@ struct SupabaseRESTClient {
         }
 
         let decoder = JSONDecoder()
-        return try decoder.decode(T.self, from: data)
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            let body = String(data: data, encoding: .utf8) ?? "No response body"
+            let preview = String(body.prefix(800))
+            throw SupabaseRESTError.decodingFailed("\(error.localizedDescription). Response: \(preview)")
+        }
+    }
+}
+
+private struct MonitorApplicationsRequest: Encodable {
+    let windowMinutes: Int
+
+    enum CodingKeys: String, CodingKey {
+        case windowMinutes = "p_window_minutes"
     }
 }
 
@@ -132,7 +165,25 @@ private struct ApplicationMetricChartRequest: Encodable {
     enum CodingKeys: String, CodingKey {
         case applicationID = "p_application_id"
         case metricKey = "p_metric_key"
-        case minutes = "p_minutes"
+        case minutes = "p_window_minutes"
+        case limit = "p_limit"
+    }
+}
+
+private struct ApplicationNodesRequest: Encodable {
+    let applicationID: String
+
+    enum CodingKeys: String, CodingKey {
+        case applicationID = "p_application_id"
+    }
+}
+
+private struct ApplicationIncidentsRequest: Encodable {
+    let applicationID: String
+    let limit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case applicationID = "p_application_id"
         case limit = "p_limit"
     }
 }

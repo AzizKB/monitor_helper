@@ -78,13 +78,17 @@ struct DashboardView: View {
                 .foregroundStyle(.secondary)
 
             Label(
-                isUsingLiveData ? "Supabase Live • \(applications.count) apps" : "Mock Data • \(applications.count) apps",
-                systemImage: isUsingLiveData ? "checkmark.icloud.fill" : "exclamationmark.icloud.fill"
+                "\(dataSourceTitle) • \(applications.count) apps",
+                systemImage: dataSourceSymbol
             )
             .font(.caption)
-            .foregroundStyle(isUsingLiveData ? .green : .orange)
+            .foregroundStyle(dataSourceColor)
 
-            if let errorMessage, !isUsingLiveData {
+            if isRefreshing && !isUsingLiveData {
+                Text("Loading the latest monitoring snapshot from Supabase.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if let errorMessage, !isUsingLiveData {
                 Text(errorMessage)
                     .font(.caption2)
                     .foregroundStyle(.red)
@@ -98,6 +102,30 @@ struct DashboardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var dataSourceTitle: String {
+        if isUsingLiveData {
+            return isRefreshing ? "Refreshing Supabase" : "Supabase Live"
+        }
+
+        return isRefreshing ? "Loading Supabase" : "Mock Data"
+    }
+
+    private var dataSourceSymbol: String {
+        if isUsingLiveData {
+            return "checkmark.icloud.fill"
+        }
+
+        return isRefreshing ? "icloud.and.arrow.down.fill" : "exclamationmark.icloud.fill"
+    }
+
+    private var dataSourceColor: Color {
+        if isUsingLiveData {
+            return .green
+        }
+
+        return isRefreshing ? .blue : .orange
     }
 }
 

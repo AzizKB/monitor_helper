@@ -27,19 +27,48 @@ struct PerformanceSignalCard: View {
                 HealthBadge(status: application.health)
             }
 
-            PerformanceLineGraphView(
-                application: application,
-                selectedTimeRange: selectedTimeRange
-            )
+            if application.hasApplicationMetrics {
+                PerformanceLineGraphView(
+                    application: application,
+                    selectedTimeRange: selectedTimeRange
+                )
 
-            HStack(spacing: 12) {
-                ForEach(PerformanceMetric.allCases, id: \.rawValue) { metric in
-                    GraphLegendItem(title: metric.rawValue, color: metric.color)
+                HStack(spacing: 12) {
+                    ForEach(PerformanceMetric.allCases, id: \.rawValue) { metric in
+                        GraphLegendItem(title: metric.rawValue, color: metric.color)
+                    }
                 }
+            } else {
+                NoPerformanceMetricsView()
             }
         }
         .padding(16)
         .background(AppTheme.secondaryGroupedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+}
+
+struct NoPerformanceMetricsView: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+
+            Text("No performance data")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text("Average Response Time, Calls per Minute and Errors per Minute are not available for this range.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 176)
+        .padding(.horizontal, 16)
+        .background(Color(.tertiarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
     }
 }
@@ -56,6 +85,10 @@ struct PerformanceLineGraphView: View {
 
     private var samples: [PerformanceChartSample] {
         MockMonitoringData.performanceSamples(for: application, range: selectedTimeRange)
+    }
+
+    private var chartHeight: CGFloat {
+        selectedTimeRange.minutes <= 30 ? 112 : 128
     }
 
     private var startDate: Date {
@@ -155,7 +188,7 @@ struct PerformanceLineGraphView: View {
             .chartLegend(.hidden)
             .chartXSelection(value: $selectedTimestamp)
             .frame(maxWidth: .infinity)
-            .frame(height: 128)
+            .frame(height: chartHeight)
             .overlay {
                 if points.isEmpty {
                     Text("No chart data")
