@@ -9,14 +9,23 @@ struct SupabaseAuthSession: Decodable {
     let accessToken: String
     let refreshToken: String?
     let expiresIn: Int?
+    let expiresAt: Int?
     let tokenType: String?
+    let user: SupabaseAuthUser?
 
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case expiresIn = "expires_in"
+        case expiresAt = "expires_at"
         case tokenType = "token_type"
+        case user
     }
+}
+
+struct SupabaseAuthUser: Decodable {
+    let id: String?
+    let email: String?
 }
 
 struct SupabaseMonitorApplicationDTO: Decodable {

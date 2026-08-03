@@ -180,6 +180,10 @@ struct MonitorView: View {
             return isRefreshing ? "Refreshing Supabase" : "Supabase Live"
         }
 
+        if let errorMessage, !errorMessage.isEmpty {
+            return "Live Data Unavailable"
+        }
+
         return isRefreshing ? "Loading Supabase" : "Mock Data"
     }
 

@@ -102,7 +102,11 @@ struct SettingsView: View {
             return isRefreshing ? "Refreshing Supabase" : "Supabase Live"
         }
 
-        return isRefreshing ? "Loading Supabase" : "Using Mock Data"
+        if let errorMessage, !errorMessage.isEmpty {
+            return "Live Data Unavailable"
+        }
+
+        return isRefreshing ? "Loading Supabase" : "Not Connected"
     }
 
     private var sourceSubtitle: String {
@@ -114,7 +118,11 @@ struct SettingsView: View {
             return "The app is fetching the latest monitoring snapshot."
         }
 
-        return "Live data is not available yet. The app is showing fallback data."
+        if let errorMessage, !errorMessage.isEmpty {
+            return errorMessage
+        }
+
+        return "Sign in and load a Supabase monitoring snapshot."
     }
 
     private var sourceSymbol: String {

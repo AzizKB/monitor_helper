@@ -48,6 +48,19 @@ struct SupabaseRESTClient {
         return try await perform(request, as: SupabaseAuthSession.self)
     }
 
+    func refreshSession(refreshToken: String) async throws -> SupabaseAuthSession {
+        var request = URLRequest(url: url(path: "/auth/v1/token"))
+        request.url?.append(queryItems: [URLQueryItem(name: "grant_type", value: "refresh_token")])
+        request.httpMethod = "POST"
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            RefreshSessionRequest(refreshToken: refreshToken)
+        )
+
+        return try await perform(request, as: SupabaseAuthSession.self)
+    }
+
     func fetchMonitorApplications(minutes: Int, accessToken: String) async throws -> [SupabaseMonitorApplicationDTO] {
         var request = URLRequest(url: url(path: "/rest/v1/rpc/get_monitor_applications"))
         request.httpMethod = "POST"
@@ -153,6 +166,14 @@ private struct MonitorApplicationsRequest: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case windowMinutes = "p_window_minutes"
+    }
+}
+
+private struct RefreshSessionRequest: Encodable {
+    let refreshToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case refreshToken = "refresh_token"
     }
 }
 
