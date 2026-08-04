@@ -29,10 +29,12 @@ final class SupabaseRealtimeSyncListener {
         self.session = session
     }
 
-    func successfulSyncEvents(accessToken: String) -> AsyncStream<SupabaseSyncRunEvent> {
+    func successfulSyncEvents(
+        accessTokenProvider: @escaping () async throws -> String
+    ) -> AsyncStream<SupabaseSyncRunEvent> {
         AsyncStream { continuation in
             let listenerTask = Task {
-                await listen(accessToken: accessToken, continuation: continuation)
+                await listen(accessTokenProvider: accessTokenProvider, continuation: continuation)
             }
 
             continuation.onTermination = { _ in
@@ -42,16 +44,21 @@ final class SupabaseRealtimeSyncListener {
     }
 
     private func listen(
-        accessToken: String,
+        accessTokenProvider: @escaping () async throws -> String,
         continuation: AsyncStream<SupabaseSyncRunEvent>.Continuation
     ) async {
+        var reconnectDelaySeconds: UInt64 = 3
+
         while !Task.isCancelled {
             do {
+                let accessToken = try await accessTokenProvider()
                 try await connectAndReceive(accessToken: accessToken, continuation: continuation)
+                reconnectDelaySeconds = 3
             } catch {
                 guard !Self.isCancellation(error) else { break }
                 print("Supabase realtime listener disconnected: \(error.localizedDescription)")
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(reconnectDelaySeconds))
+                reconnectDelaySeconds = min(reconnectDelaySeconds * 2, 60)
             }
         }
 

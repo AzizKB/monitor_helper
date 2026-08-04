@@ -16,8 +16,10 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if store.isAuthenticated {
+            if store.canAccessMonitoring {
                 MonitorTabView(store: store)
+            } else if store.isAuthenticated {
+                PendingAccessView(store: store)
             } else {
                 AuthenticationView(store: store)
             }
@@ -25,11 +27,11 @@ struct ContentView: View {
         .task {
             await store.bootstrap()
         }
-        .task(id: store.isAuthenticated) {
-            guard store.isAuthenticated else { return }
+        .task(id: store.canAccessMonitoring) {
+            guard store.canAccessMonitoring else { return }
 
             await store.refresh()
-            if store.isAuthenticated && !store.isUsingLiveData {
+            if store.canAccessMonitoring && !store.isUsingLiveData {
                 try? await Task.sleep(for: .seconds(3))
                 await store.refresh()
             }
@@ -39,14 +41,15 @@ struct ContentView: View {
                 await store.refreshIfNeeded(maxAge: 300)
             }
         }
-        .task(id: store.isAuthenticated) {
-            guard store.isAuthenticated else { return }
+        .task(id: store.canAccessMonitoring) {
+            guard store.canAccessMonitoring else { return }
             await store.listenForSyncCompletions()
         }
         .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .active else { return }
+            guard newPhase == .active, store.isAuthenticated else { return }
 
             Task {
+                await store.refreshMobileAccessStatus()
                 await store.refreshIfNeeded(maxAge: Self.foregroundRefreshMaxAge)
             }
         }

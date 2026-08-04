@@ -48,6 +48,16 @@ struct SupabaseRESTClient {
         return try await perform(request, as: SupabaseAuthSession.self)
     }
 
+    func signUp(email: String, password: String) async throws -> SupabaseSignUpResponse {
+        var request = URLRequest(url: url(path: "/auth/v1/signup"))
+        request.httpMethod = "POST"
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["email": email, "password": password])
+
+        return try await perform(request, as: SupabaseSignUpResponse.self)
+    }
+
     func refreshSession(refreshToken: String) async throws -> SupabaseAuthSession {
         var request = URLRequest(url: url(path: "/auth/v1/token"))
         request.url?.append(queryItems: [URLQueryItem(name: "grant_type", value: "refresh_token")])
@@ -59,6 +69,16 @@ struct SupabaseRESTClient {
         )
 
         return try await perform(request, as: SupabaseAuthSession.self)
+    }
+
+    func fetchMobileAccessStatus(accessToken: String) async throws -> [SupabaseMobileAccessDTO] {
+        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_mobile_access_status"))
+        request.httpMethod = "POST"
+        applyReadHeaders(to: &request, accessToken: accessToken)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+
+        return try await perform(request, as: [SupabaseMobileAccessDTO].self)
     }
 
     func fetchMonitorApplications(minutes: Int, accessToken: String) async throws -> [SupabaseMonitorApplicationDTO] {

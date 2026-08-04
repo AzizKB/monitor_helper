@@ -9,13 +9,39 @@ struct AuthenticationView: View {
     @Bindable var store: MonitoringStore
     @State private var email = ""
     @State private var password = ""
+    @State private var confirmPassword = ""
+    @State private var mode: AuthenticationMode = .signIn
     @AppStorage("authentication.rememberEmail") private var rememberEmail = true
     @AppStorage("authentication.savedEmail") private var savedEmail = ""
     @FocusState private var focusedField: Field?
 
+    private enum AuthenticationMode: Hashable {
+        case signIn
+        case signUp
+
+        var title: String {
+            switch self {
+            case .signIn:
+                return "Sign In"
+            case .signUp:
+                return "Request Access"
+            }
+        }
+
+        var buttonTitle: String {
+            switch self {
+            case .signIn:
+                return "Sign In"
+            case .signUp:
+                return "Create Account"
+            }
+        }
+    }
+
     private enum Field {
         case email
         case password
+        case confirmPassword
     }
 
     var body: some View {
@@ -32,10 +58,16 @@ struct AuthenticationView: View {
                         .font(.largeTitle)
                         .fontWeight(.semibold)
 
-                    Text("Sign in to view live AppDynamics monitoring data from Supabase.")
+                    Text("Secure mobile monitoring for approved beta users.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+
+                Picker("Authentication Mode", selection: $mode) {
+                    Text("Sign In").tag(AuthenticationMode.signIn)
+                    Text("Request Access").tag(AuthenticationMode.signUp)
+                }
+                .pickerStyle(.segmented)
 
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(spacing: 10) {
@@ -52,13 +84,28 @@ struct AuthenticationView: View {
                             .textFieldStyle(.roundedBorder)
 
                         SecureField("Password", text: $password)
-                            .textContentType(.password)
+                            .textContentType(mode == .signIn ? .password : .newPassword)
                             .focused($focusedField, equals: .password)
-                            .submitLabel(.go)
+                            .submitLabel(mode == .signIn ? .go : .next)
                             .onSubmit {
-                                signIn()
+                                if mode == .signIn {
+                                    signIn()
+                                } else {
+                                    focusedField = .confirmPassword
+                                }
                             }
                             .textFieldStyle(.roundedBorder)
+
+                        if mode == .signUp {
+                            SecureField("Confirm Password", text: $confirmPassword)
+                                .textContentType(.newPassword)
+                                .focused($focusedField, equals: .confirmPassword)
+                                .submitLabel(.go)
+                                .onSubmit {
+                                    signUp()
+                                }
+                                .textFieldStyle(.roundedBorder)
+                        }
                     }
 
                     Toggle(isOn: $rememberEmail) {
@@ -73,6 +120,7 @@ struct AuthenticationView: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    .disabled(mode == .signUp)
 
                     Button {
                         // Future SSO will be implemented after the basic email/password flow is stable.
@@ -105,6 +153,13 @@ struct AuthenticationView: View {
                     .disabled(true)
                 }
 
+                if let signUpMessage = store.signUpMessage {
+                    Label(signUpMessage, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if let errorMessage = store.errorMessage {
                     Text(errorMessage)
                         .font(.caption)
@@ -113,22 +168,27 @@ struct AuthenticationView: View {
                 }
 
                 Button {
-                    signIn()
+                    switch mode {
+                    case .signIn:
+                        signIn()
+                    case .signUp:
+                        signUp()
+                    }
                 } label: {
                     HStack {
-                        if store.isSigningIn {
+                        if isBusy {
                             ProgressView()
                         }
 
-                        Text(store.isSigningIn ? "Signing In" : "Sign In")
+                        Text(buttonTitle)
                             .fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canSignIn)
+                .disabled(!canSubmit)
 
-                Text("The iOS app uses the Supabase publishable key and an authenticated user session. It never uses service-role credentials.")
+                Text("New beta accounts must confirm email and be manually approved in Supabase before monitoring data is visible.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -147,6 +207,9 @@ struct AuthenticationView: View {
                     savedEmail = ""
                 }
             }
+            .onChange(of: mode) {
+                confirmPassword = ""
+            }
         }
     }
 
@@ -154,12 +217,37 @@ struct AuthenticationView: View {
         email.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var canSignIn: Bool {
-        !normalizedEmail.isEmpty && !password.isEmpty && !store.isSigningIn
+    private var isBusy: Bool {
+        store.isSigningIn || store.isSigningUp
+    }
+
+    private var buttonTitle: String {
+        if store.isSigningIn {
+            return "Signing In"
+        }
+
+        if store.isSigningUp {
+            return "Creating Account"
+        }
+
+        return mode.buttonTitle
+    }
+
+    private var canSubmit: Bool {
+        guard !normalizedEmail.isEmpty, !password.isEmpty, !isBusy else {
+            return false
+        }
+
+        switch mode {
+        case .signIn:
+            return true
+        case .signUp:
+            return password.count >= 8 && password == confirmPassword
+        }
     }
 
     private func signIn() {
-        guard canSignIn else { return }
+        guard mode == .signIn, canSubmit else { return }
 
         Task {
             await store.signIn(email: normalizedEmail, password: password)
@@ -171,6 +259,16 @@ struct AuthenticationView: View {
             } else {
                 savedEmail = ""
             }
+        }
+    }
+
+    private func signUp() {
+        guard mode == .signUp, canSubmit else { return }
+
+        Task {
+            await store.signUp(email: normalizedEmail, password: password)
+            password = ""
+            confirmPassword = ""
         }
     }
 }

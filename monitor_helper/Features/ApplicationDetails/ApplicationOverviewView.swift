@@ -12,6 +12,9 @@ struct ApplicationOverviewView: View {
     var loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot] = { application in MockMonitoringData.nodes(for: application) }
     var incidentsProvider: (ApplicationSnapshot) -> [IncidentSnapshot] = { _ in [] }
     var loadIncidents: (ApplicationSnapshot) async -> [IncidentSnapshot] = { _ in [] }
+    var chartCacheRevision = 0
+    var chartStateProvider: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) -> MetricChartLoadState = { _, _, _ in .empty }
+    var loadMetricChart: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) async -> Void = { _, _, _ in }
 
     var body: some View {
         ScrollView {
@@ -48,7 +51,12 @@ struct ApplicationOverviewView: View {
     private var overviewCards: some View {
         VStack(spacing: 10) {
             NavigationLink {
-                PerformanceDetailView(application: application)
+                PerformanceDetailView(
+                    application: application,
+                    chartCacheRevision: chartCacheRevision,
+                    chartStateProvider: chartStateProvider,
+                    loadMetricChart: loadMetricChart
+                )
             } label: {
                 OverviewRouteRow(
                     title: "Performance",

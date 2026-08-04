@@ -28,6 +28,29 @@ struct SupabaseAuthUser: Decodable {
     let email: String?
 }
 
+struct SupabaseSignUpResponse: Decodable {
+    let user: SupabaseAuthUser?
+    let session: SupabaseAuthSession?
+}
+
+struct SupabaseMobileAccessDTO: Decodable {
+    let userID: UUID?
+    let email: String?
+    let status: String?
+    let role: String?
+    let requestedAt: String?
+    let approvedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case email
+        case status
+        case role
+        case requestedAt = "requested_at"
+        case approvedAt = "approved_at"
+    }
+}
+
 struct SupabaseMonitorApplicationDTO: Decodable {
     let applicationID: UUID
     let appDynamicsID: Int?
@@ -109,10 +132,18 @@ struct SupabaseApplicationNodeDTO: Decodable {
 struct SupabaseChartPointDTO: Decodable {
     let observedAt: String
     let value: Double?
+    let currentValue: Double?
+    let minimumValue: Double?
+    let maximumValue: Double?
+    let countValue: Int?
 
     enum CodingKeys: String, CodingKey {
         case observedAt = "observed_at"
         case value
+        case currentValue = "current_value"
+        case minimumValue = "min_value"
+        case maximumValue = "max_value"
+        case countValue = "count_value"
     }
 }
 

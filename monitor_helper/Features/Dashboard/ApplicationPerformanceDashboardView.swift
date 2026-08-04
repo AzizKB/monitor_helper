@@ -9,6 +9,11 @@ import SwiftUI
 struct ApplicationPerformanceDashboardView: View {
     let applications: [ApplicationSnapshot]
     let selectedTimeRange: MonitoringTimeRange
+    var chartCacheRevision = 0
+    var chartStateProvider: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) -> MetricChartLoadState = { _, _, _ in .empty }
+    var loadMetricChart: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) async -> Void = { _, _, _ in }
+
+    @State private var selectedChartMode: PerformanceDashboardChartMode = .responseTime
 
     private var sortedApplications: [ApplicationSnapshot] {
         applications.sorted {
@@ -31,10 +36,33 @@ struct ApplicationPerformanceDashboardView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                Picker("Chart", selection: $selectedChartMode) {
+                    ForEach(PerformanceDashboardChartMode.allCases, id: \.self) { mode in
+                        Text(mode.title)
+                            .tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.bottom, 4)
+
                 ForEach(sortedApplications) { application in
                     PerformanceDashboardPanel(
                         application: application,
-                        selectedTimeRange: selectedTimeRange
+                        selectedTimeRange: selectedTimeRange,
+                        selectedChartMode: selectedChartMode,
+                        chartCacheRevision: chartCacheRevision,
+                        responseChartState: chartStateProvider(application, .averageResponseTime, selectedTimeRange),
+                        callsChartState: chartStateProvider(application, .callsPerMinute, selectedTimeRange),
+                        errorsChartState: chartStateProvider(application, .errorsPerMinute, selectedTimeRange),
+                        loadCharts: {
+                            switch selectedChartMode {
+                            case .responseTime:
+                                await loadMetricChart(application, .averageResponseTime, selectedTimeRange)
+                            case .callsAndErrors:
+                                await loadMetricChart(application, .callsPerMinute, selectedTimeRange)
+                                await loadMetricChart(application, .errorsPerMinute, selectedTimeRange)
+                            }
+                        }
                     )
                 }
             }
@@ -49,11 +77,17 @@ struct ApplicationPerformanceDashboardView: View {
 private struct PerformanceDashboardPanel: View {
     let application: ApplicationSnapshot
     let selectedTimeRange: MonitoringTimeRange
+    let selectedChartMode: PerformanceDashboardChartMode
+    let chartCacheRevision: Int
+    let responseChartState: MetricChartLoadState
+    let callsChartState: MetricChartLoadState
+    let errorsChartState: MetricChartLoadState
+    let loadCharts: () async -> Void
 
     private var subtitle: String {
         selectedTimeRange.minutes <= 30
-            ? "\(selectedTimeRange.displayName) current performance signal"
-            : "\(selectedTimeRange.displayName) normalized performance signal"
+            ? "\(selectedTimeRange.displayName) current \(selectedChartMode.subtitle)"
+            : "\(selectedTimeRange.displayName) \(selectedChartMode.subtitle)"
     }
 
     var body: some View {
@@ -74,10 +108,20 @@ private struct PerformanceDashboardPanel: View {
             }
 
             if application.hasApplicationMetrics {
-                PerformanceLineGraphView(
-                    application: application,
-                    selectedTimeRange: selectedTimeRange
-                )
+                switch selectedChartMode {
+                case .responseTime:
+                    LiveMetricLineChartView(
+                        metric: .averageResponseTime,
+                        state: responseChartState,
+                        retry: loadCharts
+                    )
+                case .callsAndErrors:
+                    LiveCallsErrorsChartView(
+                        callsState: callsChartState,
+                        errorsState: errorsChartState,
+                        retry: loadCharts
+                    )
+                }
             } else {
                 NoPerformanceMetricsView()
             }
@@ -105,6 +149,39 @@ private struct PerformanceDashboardPanel: View {
         .padding(16)
         .background(AppTheme.secondaryGroupedBackground)
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+        .task(id: DashboardChartTaskID(applicationID: application.id, mode: selectedChartMode, range: selectedTimeRange, revision: chartCacheRevision)) {
+            await loadCharts()
+        }
+    }
+}
+
+private struct DashboardChartTaskID: Hashable {
+    let applicationID: UUID
+    let mode: PerformanceDashboardChartMode
+    let range: MonitoringTimeRange
+    let revision: Int
+}
+
+private enum PerformanceDashboardChartMode: String, CaseIterable, Hashable {
+    case responseTime
+    case callsAndErrors
+
+    var title: String {
+        switch self {
+        case .responseTime:
+            return "Response"
+        case .callsAndErrors:
+            return "Calls & Errors"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .responseTime:
+            return "average response time trend"
+        case .callsAndErrors:
+            return "calls and errors trend"
+        }
     }
 }
 

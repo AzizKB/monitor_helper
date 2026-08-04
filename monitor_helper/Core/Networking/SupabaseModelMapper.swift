@@ -6,6 +6,17 @@
 import Foundation
 
 enum SupabaseModelMapper {
+    static func mobileAccess(from dto: SupabaseMobileAccessDTO) -> MobileAccessStatus {
+        MobileAccessStatus(
+            userID: dto.userID,
+            email: dto.email,
+            decision: MobileAccessDecision(rawValue: dto.status ?? "") ?? .unknown,
+            role: dto.role,
+            requestedAt: SupabaseDateParser.date(from: dto.requestedAt),
+            approvedAt: SupabaseDateParser.date(from: dto.approvedAt)
+        )
+    }
+
     static func application(from dto: SupabaseMonitorApplicationDTO) -> ApplicationSnapshot {
         let overallHealth = HealthStatus(apiValue: dto.overallHealth)
         let infrastructureHealth = HealthStatus(apiValue: dto.infrastructureHealth)
@@ -79,6 +90,24 @@ enum SupabaseModelMapper {
             averageResponseTime: responseTime ?? 0,
             callsPerMinute: callsPerMinute ?? 0,
             errorsPerMinute: errorsPerMinute ?? 0
+        )
+    }
+
+    static func chartPoint(from dto: SupabaseChartPointDTO) -> LiveMetricChartPoint? {
+        guard
+            let timestamp = SupabaseDateParser.date(from: dto.observedAt),
+            let value = dto.value
+        else {
+            return nil
+        }
+
+        return LiveMetricChartPoint(
+            timestamp: timestamp,
+            value: value,
+            currentValue: dto.currentValue,
+            minimumValue: dto.minimumValue,
+            maximumValue: dto.maximumValue,
+            countValue: dto.countValue
         )
     }
 

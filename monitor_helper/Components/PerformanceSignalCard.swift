@@ -9,6 +9,9 @@ import SwiftUI
 struct PerformanceSignalCard: View {
     let application: ApplicationSnapshot
     var selectedTimeRange: MonitoringTimeRange = .oneHour
+    var selectedMetric: PerformanceMetric = .averageResponseTime
+    var chartState: MetricChartLoadState = .empty
+    var loadChart: (() async -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -17,7 +20,7 @@ struct PerformanceSignalCard: View {
                     Text("Performance Signal")
                         .font(.headline)
 
-                    Text("\(selectedTimeRange.displayName) normalized signal until Supabase chart data is connected")
+                    Text("\(selectedTimeRange.displayName) • \(selectedMetric.rawValue)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -28,16 +31,11 @@ struct PerformanceSignalCard: View {
             }
 
             if application.hasApplicationMetrics {
-                PerformanceLineGraphView(
-                    application: application,
-                    selectedTimeRange: selectedTimeRange
+                LiveMetricLineChartView(
+                    metric: selectedMetric,
+                    state: chartState,
+                    retry: loadChart
                 )
-
-                HStack(spacing: 12) {
-                    ForEach(PerformanceMetric.allCases, id: \.rawValue) { metric in
-                        GraphLegendItem(title: metric.rawValue, color: metric.color)
-                    }
-                }
             } else {
                 NoPerformanceMetricsView()
             }
@@ -45,6 +43,441 @@ struct PerformanceSignalCard: View {
         .padding(16)
         .background(AppTheme.secondaryGroupedBackground)
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+}
+
+struct LiveMetricLineChartView: View {
+    let metric: PerformanceMetric
+    let state: MetricChartLoadState
+    var retry: (() async -> Void)?
+
+    @State private var selectedTimestamp: Date?
+
+    private var selectedPoint: LiveMetricChartPoint? {
+        guard
+            case let .loaded(series) = state,
+            let selectedTimestamp
+        else {
+            return nil
+        }
+
+        return series.points.min {
+            abs($0.timestamp.timeIntervalSince(selectedTimestamp)) < abs($1.timestamp.timeIntervalSince(selectedTimestamp))
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch state {
+            case .initial, .loading:
+                ChartLoadingStateView()
+            case let .loaded(series):
+                chart(series: series)
+
+                if let selectedPoint {
+                    SelectedLiveMetricPointView(metric: metric, point: selectedPoint)
+                } else {
+                    ChartInstructionView()
+                }
+            case .empty:
+                ChartEmptyStateView(metric: metric)
+            case let .failed(message):
+                ChartFailedStateView(message: message, retry: retry)
+            }
+        }
+        .padding(10)
+        .background(Color(.tertiarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+
+    private func chart(series: MetricChartSeries) -> some View {
+        Chart {
+            ForEach(series.points) { point in
+                LineMark(
+                    x: .value("Observed", point.timestamp),
+                    y: .value(metric.rawValue, point.value)
+                )
+                .foregroundStyle(metric.color)
+                .interpolationMethod(.linear)
+
+                PointMark(
+                    x: .value("Observed", point.timestamp),
+                    y: .value(metric.rawValue, point.value)
+                )
+                .foregroundStyle(metric.color)
+                .symbolSize(34)
+            }
+
+            if let averageValue = series.averageValue {
+                RuleMark(y: .value("Average", averageValue))
+                    .foregroundStyle(.secondary.opacity(0.35))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
+            }
+
+            if let selectedPoint {
+                RuleMark(x: .value("Selected Time", selectedPoint.timestamp))
+                    .foregroundStyle(.secondary.opacity(0.45))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+
+                PointMark(
+                    x: .value("Selected", selectedPoint.timestamp),
+                    y: .value(metric.rawValue, selectedPoint.value)
+                )
+                .foregroundStyle(metric.color)
+                .symbolSize(90)
+            }
+        }
+        .chartXAxis(.hidden)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                AxisGridLine()
+                AxisValueLabel()
+            }
+        }
+        .chartLegend(.hidden)
+        .chartXSelection(value: $selectedTimestamp)
+        .frame(maxWidth: .infinity)
+        .frame(height: 128)
+    }
+}
+
+struct LiveCallsErrorsChartView: View {
+    let callsState: MetricChartLoadState
+    let errorsState: MetricChartLoadState
+    var retry: (() async -> Void)?
+
+    @State private var selectedTimestamp: Date?
+
+    private var callsSeries: MetricChartSeries? {
+        guard case let .loaded(series) = callsState else { return nil }
+        return series
+    }
+
+    private var errorsSeries: MetricChartSeries? {
+        guard case let .loaded(series) = errorsState else { return nil }
+        return series
+    }
+
+    private var combinedPoints: [CombinedMetricChartPoint] {
+        let calls = normalizedPoints(from: callsSeries)
+        let errors = normalizedPoints(from: errorsSeries)
+        return (calls + errors).sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private var isLoading: Bool {
+        guard callsSeries == nil, errorsSeries == nil else { return false }
+
+        if case .loading = callsState {
+            return true
+        }
+
+        if case .loading = errorsState {
+            return true
+        }
+
+        if case .initial = callsState {
+            return true
+        }
+
+        if case .initial = errorsState {
+            return true
+        }
+
+        return false
+    }
+
+    private var failureMessage: String? {
+        if case let .failed(message) = callsState {
+            return message
+        }
+
+        if case let .failed(message) = errorsState {
+            return message
+        }
+
+        return nil
+    }
+
+    private var selectedCallsPoint: LiveMetricChartPoint? {
+        nearestPoint(in: callsSeries, to: selectedTimestamp)
+    }
+
+    private var selectedErrorsPoint: LiveMetricChartPoint? {
+        nearestPoint(in: errorsSeries, to: selectedTimestamp)
+    }
+
+    private var selectedDisplayTime: Date? {
+        selectedCallsPoint?.timestamp ?? selectedErrorsPoint?.timestamp
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isLoading {
+                ChartLoadingStateView()
+            } else if combinedPoints.isEmpty, let failureMessage {
+                ChartFailedStateView(message: failureMessage, retry: retry)
+            } else if combinedPoints.isEmpty {
+                CombinedChartEmptyStateView()
+            } else {
+                chart
+
+                if let selectedDisplayTime {
+                    SelectedCallsErrorsPointView(
+                        timestamp: selectedDisplayTime,
+                        callsPoint: selectedCallsPoint,
+                        errorsPoint: selectedErrorsPoint
+                    )
+                } else {
+                    ChartInstructionView()
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(.tertiarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+
+    private var chart: some View {
+        Chart {
+            ForEach(combinedPoints) { point in
+                LineMark(
+                    x: .value("Observed", point.timestamp),
+                    y: .value("Normalized Value", point.normalizedValue),
+                    series: .value("Metric", point.metric.rawValue)
+                )
+                .foregroundStyle(by: .value("Metric", point.metric.rawValue))
+                .interpolationMethod(.linear)
+
+                PointMark(
+                    x: .value("Observed", point.timestamp),
+                    y: .value("Normalized Value", point.normalizedValue)
+                )
+                .foregroundStyle(by: .value("Metric", point.metric.rawValue))
+                .symbolSize(34)
+            }
+
+            if let selectedTimestamp {
+                RuleMark(x: .value("Selected Time", selectedTimestamp))
+                    .foregroundStyle(.secondary.opacity(0.45))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            }
+        }
+        .chartForegroundStyleScale([
+            PerformanceMetric.callsPerMinute.rawValue: PerformanceMetric.callsPerMinute.color,
+            PerformanceMetric.errorsPerMinute.rawValue: PerformanceMetric.errorsPerMinute.color
+        ])
+        .chartYScale(domain: 0...100)
+        .chartXAxis(.hidden)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: [0, 50, 100]) { _ in
+                AxisGridLine()
+                AxisValueLabel()
+            }
+        }
+        .chartLegend(.hidden)
+        .chartXSelection(value: $selectedTimestamp)
+        .frame(maxWidth: .infinity)
+        .frame(height: 128)
+        .overlay(alignment: .topTrailing) {
+            Text("Normalized")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+        }
+    }
+
+    private func normalizedPoints(from series: MetricChartSeries?) -> [CombinedMetricChartPoint] {
+        guard let series else { return [] }
+
+        let values = series.points.map(\.value)
+        guard let minimumValue = values.min(), let maximumValue = values.max() else {
+            return []
+        }
+
+        let range = maximumValue - minimumValue
+
+        return series.points.map { point in
+            let normalizedValue: Double
+            if range == 0 {
+                normalizedValue = point.value == 0 ? 0 : 50
+            } else {
+                normalizedValue = (point.value - minimumValue) / range * 100
+            }
+
+            return CombinedMetricChartPoint(
+                timestamp: point.timestamp,
+                metric: series.metric,
+                displayValue: point.value,
+                normalizedValue: normalizedValue
+            )
+        }
+    }
+
+    private func nearestPoint(
+        in series: MetricChartSeries?,
+        to selectedTimestamp: Date?
+    ) -> LiveMetricChartPoint? {
+        guard let series, let selectedTimestamp else { return nil }
+
+        return series.points.min {
+            abs($0.timestamp.timeIntervalSince(selectedTimestamp)) < abs($1.timestamp.timeIntervalSince(selectedTimestamp))
+        }
+    }
+}
+
+private struct CombinedMetricChartPoint: Identifiable {
+    let timestamp: Date
+    let metric: PerformanceMetric
+    let displayValue: Double
+    let normalizedValue: Double
+
+    var id: String {
+        "\(metric.metricKey)-\(timestamp.timeIntervalSince1970)"
+    }
+}
+
+private struct ChartLoadingStateView: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text("Loading chart data")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 196)
+    }
+}
+
+private struct ChartEmptyStateView: View {
+    let metric: PerformanceMetric
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+
+            Text("No \(metric.shortTitle.lowercased()) data")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text("Supabase returned no datapoints for this app and time range.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 196)
+        .padding(.horizontal, 16)
+    }
+}
+
+private struct CombinedChartEmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "chart.xyaxis.line")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+
+            Text("No calls or errors data")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text("Supabase returned no Calls per Minute or Errors per Minute datapoints for this app and time range.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 196)
+        .padding(.horizontal, 16)
+    }
+}
+
+private struct ChartFailedStateView: View {
+    let message: String
+    var retry: (() async -> Void)?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.title3)
+                .foregroundStyle(.orange)
+
+            Text("Chart unavailable")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+
+            if let retry {
+                Button("Retry") {
+                    Task {
+                        await retry()
+                    }
+                }
+                .font(.caption)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 196)
+        .padding(.horizontal, 16)
+    }
+}
+
+private struct SelectedCallsErrorsPointView: View {
+    let timestamp: Date
+    let callsPoint: LiveMetricChartPoint?
+    let errorsPoint: LiveMetricChartPoint?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(timestamp.formatted(date: .omitted, time: .shortened))
+                .font(.caption)
+                .fontWeight(.semibold)
+
+            HStack(spacing: 10) {
+                SelectedMetricValue(
+                    title: "CPM",
+                    value: MetricFormatter.callsPerMinute(callsPoint?.value),
+                    color: PerformanceMetric.callsPerMinute.color
+                )
+
+                SelectedMetricValue(
+                    title: "EPM",
+                    value: MetricFormatter.errorsPerMinute(errorsPoint?.value),
+                    color: PerformanceMetric.errorsPerMinute.color
+                )
+
+                SelectedMetricValue(
+                    title: "Error %",
+                    value: MetricFormatter.percentage(errorPercentage),
+                    color: .orange
+                )
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 58)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+
+    private var errorPercentage: Double? {
+        guard
+            let callsPerMinute = callsPoint?.value,
+            let errorsPerMinute = errorsPoint?.value,
+            callsPerMinute > 0
+        else {
+            return nil
+        }
+
+        return errorsPerMinute / callsPerMinute * 100
     }
 }
 
@@ -235,6 +668,37 @@ private struct SelectedPerformanceSampleView: View {
                     color: PerformanceMetric.errorsPerMinute.color
                 )
             }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 58)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+}
+
+private struct SelectedLiveMetricPointView: View {
+    let metric: PerformanceMetric
+    let point: LiveMetricChartPoint
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(point.timestamp.formatted(date: .omitted, time: .shortened))
+                    .font(.caption)
+                    .fontWeight(.semibold)
+
+                Text(metric.rawValue)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text(metric.formatted(point.value))
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(metric.color)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)

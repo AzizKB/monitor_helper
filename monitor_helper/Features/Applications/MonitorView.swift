@@ -17,6 +17,9 @@ struct MonitorView: View {
     let loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot]
     let incidentsProvider: (ApplicationSnapshot) -> [IncidentSnapshot]
     let loadIncidents: (ApplicationSnapshot) async -> [IncidentSnapshot]
+    var chartCacheRevision = 0
+    var chartStateProvider: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) -> MetricChartLoadState = { _, _, _ in .empty }
+    var loadMetricChart: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) async -> Void = { _, _, _ in }
 
     private var sortedApplications: [ApplicationSnapshot] {
         applications.sorted {
@@ -89,7 +92,10 @@ struct MonitorView: View {
                 nodesProvider: nodesProvider,
                 loadNodes: loadNodes,
                 incidentsProvider: incidentsProvider,
-                loadIncidents: loadIncidents
+                loadIncidents: loadIncidents,
+                chartCacheRevision: chartCacheRevision,
+                chartStateProvider: chartStateProvider,
+                loadMetricChart: loadMetricChart
             )
         }
     }

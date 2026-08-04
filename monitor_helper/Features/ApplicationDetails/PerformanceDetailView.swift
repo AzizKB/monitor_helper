@@ -7,7 +7,12 @@ import SwiftUI
 
 struct PerformanceDetailView: View {
     let application: ApplicationSnapshot
+    var chartCacheRevision = 0
+    var chartStateProvider: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) -> MetricChartLoadState = { _, _, _ in .empty }
+    var loadMetricChart: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) async -> Void = { _, _, _ in }
+
     @State private var selectedTimeRange: MonitoringTimeRange = .oneHour
+    @State private var selectedMetric: PerformanceMetric = .averageResponseTime
 
     var body: some View {
         ScrollView {
@@ -20,6 +25,14 @@ struct PerformanceDetailView: View {
 
                     TimeRangePicker(selection: $selectedTimeRange)
                 }
+
+                Picker("Metric", selection: $selectedMetric) {
+                    ForEach(PerformanceMetric.allCases, id: \.self) { metric in
+                        Text(metric.shortTitle)
+                            .tag(metric)
+                    }
+                }
+                .pickerStyle(.segmented)
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     SummaryTileView(
@@ -51,7 +64,12 @@ struct PerformanceDetailView: View {
 
                 PerformanceSignalCard(
                     application: application,
-                    selectedTimeRange: selectedTimeRange
+                    selectedTimeRange: selectedTimeRange,
+                    selectedMetric: selectedMetric,
+                    chartState: chartStateProvider(application, selectedMetric, selectedTimeRange),
+                    loadChart: {
+                        await loadMetricChart(application, selectedMetric, selectedTimeRange)
+                    }
                 )
             }
             .padding(AppTheme.screenPadding)
@@ -59,7 +77,17 @@ struct PerformanceDetailView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Performance")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: PerformanceChartTaskID(applicationID: application.id, metric: selectedMetric, range: selectedTimeRange, revision: chartCacheRevision)) {
+            await loadMetricChart(application, selectedMetric, selectedTimeRange)
+        }
     }
+}
+
+private struct PerformanceChartTaskID: Hashable {
+    let applicationID: UUID
+    let metric: PerformanceMetric
+    let range: MonitoringTimeRange
+    let revision: Int
 }
 
 #Preview {

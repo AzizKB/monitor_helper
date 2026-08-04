@@ -21,7 +21,10 @@ struct MonitorTabView: View {
                     nodesProvider: store.nodes(for:),
                     loadNodes: store.loadNodes(for:),
                     incidentsProvider: store.incidents(for:),
-                    loadIncidents: store.loadIncidents(for:)
+                    loadIncidents: store.loadIncidents(for:),
+                    chartCacheRevision: store.chartCacheRevision,
+                    chartStateProvider: store.chartState(for:metric:range:),
+                    loadMetricChart: store.loadMetricChart(for:metric:range:)
                 )
             }
             .tabItem {
@@ -37,7 +40,10 @@ struct MonitorTabView: View {
                     errorMessage: store.errorMessage,
                     refresh: store.refresh,
                     nodesProvider: store.nodes(for:),
-                    loadNodes: store.loadNodes(for:)
+                    loadNodes: store.loadNodes(for:),
+                    chartCacheRevision: store.chartCacheRevision,
+                    chartStateProvider: store.chartState(for:metric:range:),
+                    loadMetricChart: store.loadMetricChart(for:metric:range:)
                 )
             }
             .tabItem {

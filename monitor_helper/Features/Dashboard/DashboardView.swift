@@ -15,6 +15,9 @@ struct DashboardView: View {
     let refresh: () async -> Void
     let nodesProvider: (ApplicationSnapshot) -> [NodeSnapshot]
     let loadNodes: (ApplicationSnapshot) async -> [NodeSnapshot]
+    var chartCacheRevision = 0
+    var chartStateProvider: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) -> MetricChartLoadState = { _, _, _ in .empty }
+    var loadMetricChart: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) async -> Void = { _, _, _ in }
 
     var body: some View {
         ScrollView {
@@ -24,7 +27,10 @@ struct DashboardView: View {
                 NavigationLink {
                     ApplicationPerformanceDashboardView(
                         applications: applications,
-                        selectedTimeRange: selectedTimeRange
+                        selectedTimeRange: selectedTimeRange,
+                        chartCacheRevision: chartCacheRevision,
+                        chartStateProvider: chartStateProvider,
+                        loadMetricChart: loadMetricChart
                     )
                 } label: {
                     DashboardRouteCard(
