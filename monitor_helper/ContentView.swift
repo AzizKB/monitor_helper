@@ -18,6 +18,8 @@ struct ContentView: View {
         Group {
             if store.canAccessMonitoring {
                 MonitorTabView(store: store)
+            } else if store.isAuthenticated && shouldShowAccessCheck {
+                AccessCheckingView(store: store)
             } else if store.isAuthenticated {
                 PendingAccessView(store: store)
             } else {
@@ -53,6 +55,10 @@ struct ContentView: View {
                 await store.refreshIfNeeded(maxAge: Self.foregroundRefreshMaxAge)
             }
         }
+    }
+
+    private var shouldShowAccessCheck: Bool {
+        store.isCheckingAccess || store.accessStatus.decision == .unknown
     }
 }
 
