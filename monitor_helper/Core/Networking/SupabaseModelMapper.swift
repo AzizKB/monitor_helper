@@ -36,7 +36,7 @@ enum SupabaseModelMapper {
             errorsPerMinute: dto.errorsPerMinute,
             errorPercentage: dto.errorPercentage,
             activeIncidentCount: dto.activeIncidentCount ?? 0,
-            nodesReporting: dto.nodeCount,
+            nodesReporting: dto.nodesReporting ?? dto.nodeCount,
             totalNodes: dto.nodeCount,
             tiersReporting: dto.tierCount,
             totalTiers: dto.tierCount,

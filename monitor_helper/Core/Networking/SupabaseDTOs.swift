@@ -70,6 +70,7 @@ struct SupabaseMonitorApplicationDTO: Decodable {
     let activeWarningCount: Int?
     let activeIncidentCount: Int?
     let nodeCount: Int?
+    let nodesReporting: Int?
     let tierCount: Int?
     let latestApplicationMetricAt: String?
     let latestInfrastructureMetricAt: String?
@@ -96,6 +97,7 @@ struct SupabaseMonitorApplicationDTO: Decodable {
         case activeWarningCount = "active_warning_count"
         case activeIncidentCount = "active_incident_count"
         case nodeCount = "node_count"
+        case nodesReporting = "nodes_reporting"
         case tierCount = "tier_count"
         case latestApplicationMetricAt = "latest_application_metric_at"
         case latestInfrastructureMetricAt = "latest_infrastructure_metric_at"

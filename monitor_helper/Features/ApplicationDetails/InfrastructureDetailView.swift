@@ -11,6 +11,7 @@ struct InfrastructureDetailView: View {
     var loadNodes: (() async -> [NodeSnapshot])?
 
     @State private var loadedNodes: [NodeSnapshot] = []
+    @State private var isLoadingNodes = false
 
     private var nodes: [NodeSnapshot] {
         loadedNodes.isEmpty ? initialNodes : loadedNodes
@@ -53,7 +54,17 @@ struct InfrastructureDetailView: View {
                     Text("Nodes")
                         .font(.headline)
 
-                    if nodes.isEmpty {
+                    if isLoadingNodes {
+                        VStack(spacing: 10) {
+                            ProgressView()
+
+                            Text("Loading node details")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                    } else if nodes.isEmpty {
                         ContentUnavailableView(
                             "No Node Data",
                             systemImage: "server.rack",
@@ -74,6 +85,8 @@ struct InfrastructureDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             if let loadNodes {
+                isLoadingNodes = initialNodes.isEmpty
+                defer { isLoadingNodes = false }
                 loadedNodes = await loadNodes()
             }
         }

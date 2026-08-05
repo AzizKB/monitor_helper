@@ -53,6 +53,11 @@ struct LiveMetricLineChartView: View {
 
     @State private var selectedTimestamp: Date?
 
+    private var latestTimestamp: Date? {
+        guard case let .loaded(series) = state else { return nil }
+        return series.points.last?.timestamp
+    }
+
     private var selectedPoint: LiveMetricChartPoint? {
         guard
             case let .loaded(series) = state,
@@ -88,6 +93,12 @@ struct LiveMetricLineChartView: View {
         .padding(10)
         .background(Color(.tertiarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+        .onAppear {
+            selectedTimestamp = latestTimestamp
+        }
+        .onChange(of: latestTimestamp) { _, newValue in
+            selectedTimestamp = newValue
+        }
     }
 
     private func chart(series: MetricChartSeries) -> some View {
@@ -210,6 +221,15 @@ struct LiveCallsErrorsChartView: View {
         selectedCallsPoint?.timestamp ?? selectedErrorsPoint?.timestamp
     }
 
+    private var latestTimestamp: Date? {
+        [
+            callsSeries?.points.last?.timestamp,
+            errorsSeries?.points.last?.timestamp
+        ]
+            .compactMap { $0 }
+            .max()
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isLoading {
@@ -235,6 +255,12 @@ struct LiveCallsErrorsChartView: View {
         .padding(10)
         .background(Color(.tertiarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+        .onAppear {
+            selectedTimestamp = latestTimestamp
+        }
+        .onChange(of: latestTimestamp) { _, newValue in
+            selectedTimestamp = newValue
+        }
     }
 
     private var chart: some View {
