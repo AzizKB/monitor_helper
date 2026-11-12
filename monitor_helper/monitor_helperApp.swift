@@ -11,7 +11,14 @@ import SwiftUI
 struct monitor_helperApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            // Hosted unit tests exercise models without starting live Auth/API tasks.
+            if NSClassFromString("XCTestCase") != nil
+                || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+                || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil {
+                Color.clear
+            } else {
+                ContentView()
+            }
         }
     }
 }

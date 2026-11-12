@@ -29,6 +29,10 @@ struct LiveMetricChartPoint: Identifiable, Hashable {
     let minimumValue: Double?
     let maximumValue: Double?
     let countValue: Int?
+    var sumValue: Double? = nil
+    var sampleCount: Int = 1
+    var peakValue: Double? = nil
+    var peakObservedAt: Date? = nil
 
     var id: Date { timestamp }
 }
@@ -36,6 +40,22 @@ struct LiveMetricChartPoint: Identifiable, Hashable {
 struct MetricChartSeries: Hashable {
     let metric: PerformanceMetric
     let points: [LiveMetricChartPoint]
+    let windowStart: Date
+    let windowEnd: Date
+    let intervalMinutes: Int
+
+    var timeDomain: ClosedRange<Date> { windowStart...windowEnd }
+
+    // Separate line segments prevent drawing through missing intervals.
+    var plottedPoints: [SegmentedMetricChartPoint] {
+        var segment = 0
+        return points.enumerated().map { index, point in
+            if index > 0, point.timestamp.timeIntervalSince(points[index - 1].timestamp) > Double(intervalMinutes * 60) + 1 {
+                segment += 1
+            }
+            return SegmentedMetricChartPoint(point: point, segment: segment)
+        }
+    }
 
     var latestPoint: LiveMetricChartPoint? {
         points.last
@@ -51,8 +71,24 @@ struct MetricChartSeries: Hashable {
 
     var averageValue: Double? {
         guard !points.isEmpty else { return nil }
-        return points.map(\.value).reduce(0, +) / Double(points.count)
+        if metric == .averageResponseTime,
+           points.allSatisfy({ $0.sumValue != nil && $0.countValue != nil }) {
+            let count = points.compactMap(\.countValue).reduce(0, +)
+            if count > 0 {
+                return points.compactMap(\.sumValue).reduce(0, +) / Double(count)
+            }
+        }
+        let samples = points.map(\.sampleCount).reduce(0, +)
+        guard samples > 0 else { return nil }
+        return points.reduce(0) { $0 + $1.value * Double($1.sampleCount) } / Double(samples)
     }
+}
+
+struct SegmentedMetricChartPoint: Identifiable {
+    let point: LiveMetricChartPoint
+    let segment: Int
+
+    var id: Date { point.timestamp }
 }
 
 enum MetricChartLoadState: Equatable {

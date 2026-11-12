@@ -36,7 +36,7 @@ enum SupabaseModelMapper {
             errorsPerMinute: dto.errorsPerMinute,
             errorPercentage: dto.errorPercentage,
             activeIncidentCount: dto.activeIncidentCount ?? 0,
-            nodesReporting: dto.nodesReporting ?? dto.nodeCount,
+            nodesReporting: dto.nodesReporting,
             totalNodes: dto.nodeCount,
             tiersReporting: dto.tierCount,
             totalTiers: dto.tierCount,
@@ -107,7 +107,11 @@ enum SupabaseModelMapper {
             currentValue: dto.currentValue,
             minimumValue: dto.minimumValue,
             maximumValue: dto.maximumValue,
-            countValue: dto.countValue
+            countValue: dto.countValue,
+            sumValue: dto.sumValue,
+            sampleCount: dto.sampleCount ?? 1,
+            peakValue: dto.peakValue,
+            peakObservedAt: SupabaseDateParser.date(from: dto.peakObservedAt)
         )
     }
 

@@ -78,7 +78,7 @@ struct PendingAccessView: View {
                 }
                 .buttonStyle(.bordered)
 
-                Text("After an administrator approves this account in Supabase, tap Check Approval to enter the app.")
+                Text("Your request is with an administrator. Check again after you've been approved, or sign out to use a different account.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

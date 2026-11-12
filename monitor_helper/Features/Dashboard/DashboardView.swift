@@ -27,7 +27,7 @@ struct DashboardView: View {
                 NavigationLink {
                     ApplicationPerformanceDashboardView(
                         applications: applications,
-                        selectedTimeRange: selectedTimeRange,
+                        selectedTimeRange: $selectedTimeRange,
                         chartCacheRevision: chartCacheRevision,
                         chartStateProvider: chartStateProvider,
                         loadMetricChart: loadMetricChart

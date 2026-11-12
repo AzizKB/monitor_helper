@@ -8,7 +8,7 @@ import SwiftUI
 
 struct ApplicationPerformanceDashboardView: View {
     let applications: [ApplicationSnapshot]
-    let selectedTimeRange: MonitoringTimeRange
+    @Binding var selectedTimeRange: MonitoringTimeRange
     var chartCacheRevision = 0
     var chartStateProvider: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) -> MetricChartLoadState = { _, _, _ in .empty }
     var loadMetricChart: (ApplicationSnapshot, PerformanceMetric, MonitoringTimeRange) async -> Void = { _, _, _ in }
@@ -71,6 +71,21 @@ struct ApplicationPerformanceDashboardView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("App Performance")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if #available(iOS 26.0, *) {
+                timeRangeToolbarItem
+                    .sharedBackgroundVisibility(.hidden)
+            } else {
+                timeRangeToolbarItem
+            }
+        }
+    }
+
+    private var timeRangeToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            TimeRangePicker(selection: $selectedTimeRange)
+                .buttonStyle(.plain)
+        }
     }
 }
 
@@ -344,7 +359,7 @@ private struct LegendText: View {
     NavigationStack {
         ApplicationPerformanceDashboardView(
             applications: MockMonitoringData.applications,
-            selectedTimeRange: .oneHour
+            selectedTimeRange: .constant(.oneHour)
         )
     }
 }

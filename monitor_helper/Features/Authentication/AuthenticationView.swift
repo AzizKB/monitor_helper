@@ -1,8 +1,3 @@
-//
-//  AuthenticationView.swift
-//  monitor_helper
-//
-
 import SwiftUI
 
 struct AuthenticationView: View {
@@ -10,269 +5,142 @@ struct AuthenticationView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
-    @State private var mode: AuthenticationMode = .signIn
+    @State private var isRequestingAccess = false
+    @State private var submitted = false
+    @State private var emailWasEdited = false
+    @State private var activeVerification: VerificationRequest?
     @AppStorage("authentication.rememberEmail") private var rememberEmail = true
     @AppStorage("authentication.savedEmail") private var savedEmail = ""
-    @FocusState private var focusedField: Field?
+    @FocusState private var emailFocused: Bool
+    @FocusState private var passwordFocused: Bool
+    @FocusState private var confirmationFocused: Bool
 
-    private enum AuthenticationMode: Hashable {
-        case signIn
-        case signUp
+    private var normalizedEmail: String { AuthenticationInput.normalizedEmail(email) }
+    private var busy: Bool { store.isSigningIn || store.isSigningUp }
 
-        var title: String {
-            switch self {
-            case .signIn:
-                return "Sign In"
-            case .signUp:
-                return "Request Access"
-            }
-        }
-
-        var buttonTitle: String {
-            switch self {
-            case .signIn:
-                return "Sign In"
-            case .signUp:
-                return "Create Account"
-            }
-        }
-    }
-
-    private enum Field {
-        case email
-        case password
-        case confirmPassword
+    private struct VerificationRequest: Identifiable {
+        let id = UUID()
+        let email: String
+        let purpose: EmailVerificationPurpose
+        var emailAlreadySent = false
     }
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                Spacer(minLength: 24)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Image(systemName: "eye").font(.system(size: 32)).foregroundStyle(AppTheme.accent)
+                        Text("Monitor Helper").font(.largeTitle).fontWeight(.semibold)
+                        Text(isRequestingAccess ? "Create your account, verify your email, and request access to monitoring." : "Welcome back. Sign in to your monitoring workspace.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Picker("Authentication mode", selection: $isRequestingAccess) {
+                        Text("Sign In").tag(false)
+                        Text("Request Access").tag(true)
+                    }
+                    .pickerStyle(.segmented).disabled(busy)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Image(systemName: "eye")
-                        .font(.largeTitle)
-                        .foregroundStyle(AppTheme.accent)
-
-                    Text("monitor_helper")
-                        .font(.largeTitle)
-                        .fontWeight(.semibold)
-
-                    Text("Secure mobile monitoring for approved beta users.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
-                Picker("Authentication Mode", selection: $mode) {
-                    Text("Sign In").tag(AuthenticationMode.signIn)
-                    Text("Request Access").tag(AuthenticationMode.signUp)
-                }
-                .pickerStyle(.segmented)
-
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(spacing: 10) {
-                        TextField("Email", text: $email)
-                            .textContentType(.username)
-                            .keyboardType(.emailAddress)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .focused($focusedField, equals: .email)
-                            .submitLabel(.next)
-                            .onSubmit {
-                                focusedField = .password
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Email address").font(.subheadline).fontWeight(.medium)
+                            TextField("name@example.com", text: $email)
+                                .textContentType(.username).keyboardType(.emailAddress)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .textFieldStyle(.roundedBorder).controlSize(.large)
+                                .focused($emailFocused).submitLabel(.next)
+                                .onSubmit { emailFocused = false; passwordFocused = true }
+                            if (submitted || emailWasEdited) && !AuthenticationInput.isValidEmail(email) {
+                                Text("Enter a valid email address, such as name@example.com.").font(.caption).foregroundStyle(.red)
                             }
-                            .textFieldStyle(.roundedBorder)
-
-                        SecureField("Password", text: $password)
-                            .textContentType(mode == .signIn ? .password : .newPassword)
-                            .focused($focusedField, equals: .password)
-                            .submitLabel(mode == .signIn ? .go : .next)
-                            .onSubmit {
-                                if mode == .signIn {
-                                    signIn()
-                                } else {
-                                    focusedField = .confirmPassword
-                                }
+                        }
+                        AuthenticationPasswordField(title: "Password", text: $password, isNewPassword: isRequestingAccess, submitLabel: isRequestingAccess ? .next : .go, focus: $passwordFocused) {
+                            if isRequestingAccess { confirmationFocused = true } else { submit() }
+                        }
+                        if isRequestingAccess {
+                            NewPasswordGuidance(password: password)
+                            AuthenticationPasswordField(title: "Confirm password", text: $confirmPassword, isNewPassword: true, focus: $confirmationFocused, onSubmit: submit)
+                            if (!confirmPassword.isEmpty || submitted) && password != confirmPassword {
+                                Text("Passwords don't match yet.").font(.caption).foregroundStyle(.red)
                             }
-                            .textFieldStyle(.roundedBorder)
-
-                        if mode == .signUp {
-                            SecureField("Confirm Password", text: $confirmPassword)
-                                .textContentType(.newPassword)
-                                .focused($focusedField, equals: .confirmPassword)
-                                .submitLabel(.go)
-                                .onSubmit {
-                                    signUp()
-                                }
-                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            Button("Forgot password?") {
+                                store.clearAuthenticationMessages()
+                                activeVerification = VerificationRequest(email: normalizedEmail, purpose: .recovery)
+                            }.font(.subheadline).frame(minHeight: 44)
                         }
+                        Toggle("Remember email", isOn: $rememberEmail).font(.subheadline)
+                        Text("Only your email is remembered here. Use iOS Passwords or your password manager to save your password.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
 
-                    Toggle(isOn: $rememberEmail) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Remember email")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-
-                            Text("Password stays with iOS Keychain or your password manager.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    if submitted && password.isEmpty {
+                        AuthenticationNotice(message: "Enter your password to continue.")
+                    } else if submitted && isRequestingAccess && !AuthenticationInput.isValidNewPassword(password) {
+                        AuthenticationNotice(message: "Please meet the password requirements above. Long passphrases are welcome; include both letter cases, a number, and a symbol.")
                     }
-                    .toggleStyle(.switch)
-                    .disabled(mode == .signUp)
+                    if let error = store.errorMessage { AuthenticationNotice(message: error) }
 
-                    Button {
-                        // Future SSO will be implemented after the basic email/password flow is stable.
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: "person.badge.key")
-                                .foregroundStyle(.secondary)
+                    Button(action: submit) {
+                        HStack {
+                            if busy { ProgressView().tint(.white) }
+                            Text(busy ? (isRequestingAccess ? "Creating account…" : "Signing in…") : (isRequestingAccess ? "Create Account & Request Access" : "Sign In"))
+                                .fontWeight(.semibold)
+                        }.frame(maxWidth: .infinity, minHeight: 36)
+                    }.buttonStyle(.borderedProminent).disabled(busy)
 
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Sign in with SSO")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-
-                                Text("Planned for a future release")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Spacer()
-
-                            Text("Later")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(12)
-                        .background(Color(.secondarySystemGroupedBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+                    if !isRequestingAccess {
+                        Button("Need to verify your email?") {
+                            store.clearAuthenticationMessages()
+                            activeVerification = VerificationRequest(email: normalizedEmail, purpose: .signup)
+                        }.font(.subheadline).frame(minHeight: 44)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(true)
+                    Label("Email verification comes first. An administrator then reviews your request before monitoring data is available.", systemImage: "lock.shield")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
-
-                if let signUpMessage = store.signUpMessage {
-                    Label(signUpMessage, systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let errorMessage = store.errorMessage {
-                    Text(errorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Button {
-                    switch mode {
-                    case .signIn:
-                        signIn()
-                    case .signUp:
-                        signUp()
-                    }
-                } label: {
-                    HStack {
-                        if isBusy {
-                            ProgressView()
-                        }
-
-                        Text(buttonTitle)
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSubmit)
-
-                Text("New beta accounts must confirm email and be manually approved in Supabase before monitoring data is visible.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Spacer()
+                .frame(maxWidth: 500).padding(AppTheme.screenPadding).padding(.top, 28).padding(.bottom, 24)
+                .frame(maxWidth: .infinity)
             }
-            .padding(AppTheme.screenPadding)
-            .background(AppTheme.groupedBackground)
-            .onAppear {
-                guard email.isEmpty, rememberEmail else { return }
-                email = savedEmail
-                focusedField = savedEmail.isEmpty ? .email : .password
+            .scrollDismissesKeyboard(.interactively).background(AppTheme.groupedBackground)
+            .onAppear { if email.isEmpty && rememberEmail { email = savedEmail } }
+            .onChange(of: emailFocused) { _, focused in
+                if !focused && !email.isEmpty { emailWasEdited = true }
             }
-            .onChange(of: rememberEmail) { _, newValue in
-                if !newValue {
-                    savedEmail = ""
-                }
+            .onChange(of: rememberEmail) { _, remember in if !remember { savedEmail = "" } }
+            .onChange(of: isRequestingAccess) {
+                password = ""; confirmPassword = ""; submitted = false
+                store.clearAuthenticationMessages()
             }
-            .onChange(of: mode) {
-                confirmPassword = ""
+            .sheet(item: $activeVerification) { request in
+                EmailVerificationView(store: store, email: request.email, purpose: request.purpose, emailAlreadySent: request.emailAlreadySent)
             }
         }
     }
 
-    private var normalizedEmail: String {
-        email.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var isBusy: Bool {
-        store.isSigningIn || store.isSigningUp
-    }
-
-    private var buttonTitle: String {
-        if store.isSigningIn {
-            return "Signing In"
-        }
-
-        if store.isSigningUp {
-            return "Creating Account"
-        }
-
-        return mode.buttonTitle
-    }
-
-    private var canSubmit: Bool {
-        guard !normalizedEmail.isEmpty, !password.isEmpty, !isBusy else {
-            return false
-        }
-
-        switch mode {
-        case .signIn:
-            return true
-        case .signUp:
-            return password.count >= 8 && password == confirmPassword
-        }
-    }
-
-    private func signIn() {
-        guard mode == .signIn, canSubmit else { return }
-
+    private func submit() {
+        guard !busy else { return }
+        submitted = true
+        store.clearAuthenticationMessages()
+        guard AuthenticationInput.isValidEmail(email), !password.isEmpty else { return }
+        guard !isRequestingAccess || (AuthenticationInput.isValidNewPassword(password) && password == confirmPassword) else { return }
+        emailFocused = false; passwordFocused = false; confirmationFocused = false
         Task {
-            await store.signIn(email: normalizedEmail, password: password)
-
-            guard store.isAuthenticated else { return }
-
-            if rememberEmail {
-                savedEmail = normalizedEmail
+            if isRequestingAccess {
+                let succeeded = await store.signUp(email: normalizedEmail, password: password)
+                guard succeeded else { return }
+                password = ""; confirmPassword = ""; submitted = false
+                rememberCurrentEmail()
+                if !store.isAuthenticated {
+                    activeVerification = VerificationRequest(email: normalizedEmail, purpose: .signup, emailAlreadySent: true)
+                }
             } else {
-                savedEmail = ""
+                await store.signIn(email: normalizedEmail, password: password)
+                if store.isAuthenticated { rememberCurrentEmail(); password = "" }
             }
         }
     }
 
-    private func signUp() {
-        guard mode == .signUp, canSubmit else { return }
-
-        Task {
-            await store.signUp(email: normalizedEmail, password: password)
-            password = ""
-            confirmPassword = ""
-        }
-    }
+    private func rememberCurrentEmail() { savedEmail = rememberEmail ? normalizedEmail : "" }
 }
 
-#Preview {
-    AuthenticationView(store: MonitoringStore())
-}
+#Preview { AuthenticationView(store: MonitoringStore()) }

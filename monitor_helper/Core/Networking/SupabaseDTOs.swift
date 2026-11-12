@@ -31,6 +31,18 @@ struct SupabaseAuthUser: Decodable {
 struct SupabaseSignUpResponse: Decodable {
     let user: SupabaseAuthUser?
     let session: SupabaseAuthSession?
+
+    private enum CodingKeys: String, CodingKey { case user, session, accessToken = "access_token" }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        user = try container.decodeIfPresent(SupabaseAuthUser.self, forKey: .user)
+        if container.contains(.accessToken) {
+            session = try SupabaseAuthSession(from: decoder)
+        } else {
+            session = try container.decodeIfPresent(SupabaseAuthSession.self, forKey: .session)
+        }
+    }
 }
 
 struct SupabaseMobileAccessDTO: Decodable {
@@ -138,6 +150,13 @@ struct SupabaseChartPointDTO: Decodable {
     let minimumValue: Double?
     let maximumValue: Double?
     let countValue: Int?
+    let sumValue: Double?
+    let sampleCount: Int?
+    let peakValue: Double?
+    let peakObservedAt: String?
+    let windowStart: String?
+    let windowEnd: String?
+    let bucketMinutes: Int?
 
     enum CodingKeys: String, CodingKey {
         case observedAt = "observed_at"
@@ -146,6 +165,13 @@ struct SupabaseChartPointDTO: Decodable {
         case minimumValue = "min_value"
         case maximumValue = "max_value"
         case countValue = "count_value"
+        case sumValue = "sum_value"
+        case sampleCount = "sample_count"
+        case peakValue = "peak_value"
+        case peakObservedAt = "peak_observed_at"
+        case windowStart = "window_start"
+        case windowEnd = "window_end"
+        case bucketMinutes = "bucket_minutes"
     }
 }
 

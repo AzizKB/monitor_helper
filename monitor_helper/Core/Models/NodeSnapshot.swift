@@ -15,4 +15,10 @@ struct NodeSnapshot: Identifiable, Hashable {
     let memoryPercent: Double?
     let availabilityPercent: Double?
     let lastUpdatedAt: Date?
+
+    // Matches the backend's live-node metric window, including collector delay.
+    func isReporting(asOf date: Date = .now) -> Bool {
+        guard let lastUpdatedAt else { return false }
+        return lastUpdatedAt >= date.addingTimeInterval(-65 * 60)
+    }
 }

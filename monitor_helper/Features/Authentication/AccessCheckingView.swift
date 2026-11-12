@@ -14,10 +14,14 @@ struct AccessCheckingView: View {
                 Spacer(minLength: 32)
 
                 VStack(alignment: .leading, spacing: 12) {
-                    ProgressView()
-                        .controlSize(.large)
+                    if store.isCheckingAccess {
+                        ProgressView().controlSize(.large)
+                    } else {
+                        Image(systemName: "exclamationmark.shield")
+                            .font(.system(size: 36)).foregroundStyle(.orange)
+                    }
 
-                    Text("Checking Access")
+                    Text(store.isCheckingAccess ? "Checking Access" : "Couldn't Check Access")
                         .font(.largeTitle)
                         .fontWeight(.semibold)
 

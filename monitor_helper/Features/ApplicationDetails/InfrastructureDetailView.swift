@@ -10,11 +10,12 @@ struct InfrastructureDetailView: View {
     let initialNodes: [NodeSnapshot]
     var loadNodes: (() async -> [NodeSnapshot])?
 
-    @State private var loadedNodes: [NodeSnapshot] = []
+    @State private var loadedNodes: [NodeSnapshot]?
     @State private var isLoadingNodes = false
 
     private var nodes: [NodeSnapshot] {
-        loadedNodes.isEmpty ? initialNodes : loadedNodes
+        let now = Date.now
+        return (loadedNodes ?? initialNodes).filter { $0.isReporting(asOf: now) }
     }
 
     var body: some View {
@@ -83,7 +84,7 @@ struct InfrastructureDetailView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Infrastructure")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
+        .task(id: application) {
             if let loadNodes {
                 isLoadingNodes = initialNodes.isEmpty
                 defer { isLoadingNodes = false }

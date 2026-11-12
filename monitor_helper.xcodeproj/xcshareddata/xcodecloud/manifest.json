@@ -1,0 +1,9 @@
+{
+  "id" : "bf8a98a5-0b8e-44ba-b3b9-6e2bece2ebb3",
+  "targets" : [
+    {
+      "id" : "9E950A0A-AAAA-490B-BE95-16CE5FFC1864",
+      "name" : "monitor_helper"
+    }
+  ]
+}

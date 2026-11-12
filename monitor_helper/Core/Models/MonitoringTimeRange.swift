@@ -47,4 +47,13 @@ enum MonitoringTimeRange: String, CaseIterable, Identifiable {
     var displayName: String {
         "Last \(rawValue)"
     }
+
+    var chartIntervalMinutes: Int {
+        switch self {
+        case .fifteenMinutes, .thirtyMinutes, .oneHour, .threeHours:
+            return 1
+        case .sixHours, .twelveHours, .twentyFourHours:
+            return 10
+        }
+    }
 }

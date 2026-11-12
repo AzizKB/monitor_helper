@@ -78,9 +78,10 @@ struct LiveMetricLineChartView: View {
                 ChartLoadingStateView()
             case let .loaded(series):
                 chart(series: series)
+                ChartWindowCaption(series: series)
 
                 if let selectedPoint {
-                    SelectedLiveMetricPointView(metric: metric, point: selectedPoint)
+                    SelectedLiveMetricPointView(metric: metric, point: selectedPoint, intervalMinutes: series.intervalMinutes)
                 } else {
                     ChartInstructionView()
                 }
@@ -103,10 +104,12 @@ struct LiveMetricLineChartView: View {
 
     private func chart(series: MetricChartSeries) -> some View {
         Chart {
-            ForEach(series.points) { point in
+            ForEach(series.plottedPoints) { plottedPoint in
+                let point = plottedPoint.point
                 LineMark(
                     x: .value("Observed", point.timestamp),
-                    y: .value(metric.rawValue, point.value)
+                    y: .value(metric.rawValue, point.value),
+                    series: .value("Continuous segment", plottedPoint.segment)
                 )
                 .foregroundStyle(metric.color)
                 .interpolationMethod(.linear)
@@ -138,6 +141,7 @@ struct LiveMetricLineChartView: View {
                 .symbolSize(90)
             }
         }
+        .chartXScale(domain: series.timeDomain)
         .chartXAxis(.hidden)
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
@@ -173,6 +177,12 @@ struct LiveCallsErrorsChartView: View {
         let calls = normalizedPoints(from: callsSeries)
         let errors = normalizedPoints(from: errorsSeries)
         return (calls + errors).sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private var chartSeries: MetricChartSeries? { callsSeries ?? errorsSeries }
+
+    private var timeDomain: ClosedRange<Date> {
+        chartSeries?.timeDomain ?? Date.distantPast...Date.distantFuture
     }
 
     private var isLoading: Bool {
@@ -240,10 +250,14 @@ struct LiveCallsErrorsChartView: View {
                 CombinedChartEmptyStateView()
             } else {
                 chart
+                if let chartSeries {
+                    ChartWindowCaption(series: chartSeries)
+                }
 
                 if let selectedDisplayTime {
                     SelectedCallsErrorsPointView(
                         timestamp: selectedDisplayTime,
+                        intervalMinutes: chartSeries?.intervalMinutes ?? 1,
                         callsPoint: selectedCallsPoint,
                         errorsPoint: selectedErrorsPoint
                     )
@@ -269,7 +283,7 @@ struct LiveCallsErrorsChartView: View {
                 LineMark(
                     x: .value("Observed", point.timestamp),
                     y: .value("Normalized Value", point.normalizedValue),
-                    series: .value("Metric", point.metric.rawValue)
+                    series: .value("Metric segment", "\(point.metric.metricKey)-\(point.segment)")
                 )
                 .foregroundStyle(by: .value("Metric", point.metric.rawValue))
                 .interpolationMethod(.linear)
@@ -288,6 +302,7 @@ struct LiveCallsErrorsChartView: View {
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
             }
         }
+        .chartXScale(domain: timeDomain)
         .chartForegroundStyleScale([
             PerformanceMetric.callsPerMinute.rawValue: PerformanceMetric.callsPerMinute.color,
             PerformanceMetric.errorsPerMinute.rawValue: PerformanceMetric.errorsPerMinute.color
@@ -322,7 +337,8 @@ struct LiveCallsErrorsChartView: View {
 
         let range = maximumValue - minimumValue
 
-        return series.points.map { point in
+        return series.plottedPoints.map { plottedPoint in
+            let point = plottedPoint.point
             let normalizedValue: Double
             if range == 0 {
                 normalizedValue = point.value == 0 ? 0 : 50
@@ -334,7 +350,8 @@ struct LiveCallsErrorsChartView: View {
                 timestamp: point.timestamp,
                 metric: series.metric,
                 displayValue: point.value,
-                normalizedValue: normalizedValue
+                normalizedValue: normalizedValue,
+                segment: plottedPoint.segment
             )
         }
     }
@@ -356,6 +373,7 @@ private struct CombinedMetricChartPoint: Identifiable {
     let metric: PerformanceMetric
     let displayValue: Double
     let normalizedValue: Double
+    let segment: Int
 
     var id: String {
         "\(metric.metricKey)-\(timestamp.timeIntervalSince1970)"
@@ -458,6 +476,7 @@ private struct ChartFailedStateView: View {
 
 private struct SelectedCallsErrorsPointView: View {
     let timestamp: Date
+    let intervalMinutes: Int
     let callsPoint: LiveMetricChartPoint?
     let errorsPoint: LiveMetricChartPoint?
 
@@ -466,6 +485,11 @@ private struct SelectedCallsErrorsPointView: View {
             Text(timestamp.formatted(date: .omitted, time: .shortened))
                 .font(.caption)
                 .fontWeight(.semibold)
+            if intervalMinutes > 1 {
+                Text("\(intervalMinutes)-min average · \(timestamp.addingTimeInterval(-Double(intervalMinutes * 60)).formatted(date: .omitted, time: .shortened))–\(timestamp.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack(spacing: 10) {
                 SelectedMetricValue(
@@ -489,7 +513,7 @@ private struct SelectedCallsErrorsPointView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 58)
+        .frame(minHeight: 58)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
     }
@@ -706,6 +730,7 @@ private struct SelectedPerformanceSampleView: View {
 private struct SelectedLiveMetricPointView: View {
     let metric: PerformanceMetric
     let point: LiveMetricChartPoint
+    let intervalMinutes: Int
 
     var body: some View {
         HStack(spacing: 12) {
@@ -717,6 +742,17 @@ private struct SelectedLiveMetricPointView: View {
                 Text(metric.rawValue)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+
+                if intervalMinutes > 1 {
+                    Text("\(intervalMinutes)-min average · \(point.timestamp.addingTimeInterval(-Double(intervalMinutes * 60)).formatted(date: .omitted, time: .shortened))–\(point.timestamp.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let peak = point.peakValue {
+                        Text("Peak 1-min: \(metric.formatted(peak))")
+                            .font(.caption2)
+                            .foregroundStyle(metric.color)
+                    }
+                }
             }
 
             Spacer()
@@ -728,9 +764,37 @@ private struct SelectedLiveMetricPointView: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 58)
+        .frame(minHeight: 58)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
+    }
+}
+
+private struct ChartWindowCaption: View {
+    let series: MetricChartSeries
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(boundary(series.windowStart))
+            Spacer(minLength: 4)
+            Text("\(series.intervalMinutes)-min intervals")
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text(boundary(series.windowEnd))
+        }
+        .font(.caption2)
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func boundary(_ date: Date) -> String {
+        if series.windowEnd.timeIntervalSince(series.windowStart) >= 24 * 60 * 60 {
+            return date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        }
+        return date.formatted(date: .omitted, time: .shortened)
     }
 }
 

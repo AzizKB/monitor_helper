@@ -86,12 +86,13 @@ final class MonitoringStore {
             session = storedSession
             await refreshMobileAccessStatus()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AuthenticationMessage.error(error, action: .signIn)
         }
     }
 
-    func signUp(email: String, password: String) async {
-        guard !isSigningUp else { return }
+    @discardableResult
+    func signUp(email: String, password: String) async -> Bool {
+        guard !isSigningUp else { return false }
 
         isSigningUp = true
         errorMessage = nil
@@ -109,9 +110,25 @@ final class MonitoringStore {
             }
 
             signUpMessage = "Account created. Confirm your email, then wait for admin approval."
+            return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AuthenticationMessage.error(error, action: .signUp)
+            return false
         }
+    }
+
+    func clearAuthenticationMessages() {
+        errorMessage = nil
+        signUpMessage = nil
+    }
+
+    func completeEmailVerification(_ authSession: SupabaseAuthSession) async {
+        do {
+            let storedSession = StoredSupabaseSession(authSession: authSession)
+            try sessionStore.save(storedSession)
+            session = storedSession
+            await refreshMobileAccessStatus()
+        } catch { errorMessage = "We couldn't save your session. Please sign in again." }
     }
 
     func refreshMobileAccessStatus() async {
@@ -142,7 +159,7 @@ final class MonitoringStore {
             }
         } catch {
             guard !Self.isCancellation(error) else { return }
-            errorMessage = error.localizedDescription
+            errorMessage = AuthenticationMessage.error(error, action: .checkAccess)
             accessStatus = MobileAccessStatus(
                 userID: nil,
                 email: session?.userEmail,
@@ -287,6 +304,8 @@ final class MonitoringStore {
         }
 
         chartCache[key] = .loading
+        let revision = chartCacheRevision
+        let requestedEnd = lastLoadedAt ?? .now
 
         do {
             let dtos = try await authenticatedRequest { accessToken in
@@ -294,19 +313,35 @@ final class MonitoringStore {
                     applicationID: application.id,
                     metricKey: metric.metricKey,
                     minutes: range.minutes,
-                    limit: Self.chartPointLimit(for: range),
+                    endAt: requestedEnd,
                     accessToken: accessToken
                 )
             }
             let points = dtos.compactMap(SupabaseModelMapper.chartPoint(from:))
+            guard revision == chartCacheRevision, canAccessMonitoring else { return }
 
             guard !points.isEmpty else {
                 chartCache[key] = .empty
                 return
             }
 
-            chartCache[key] = .loaded(MetricChartSeries(metric: metric, points: points))
+            guard let first = dtos.first,
+                  let windowStart = SupabaseDateParser.date(from: first.windowStart),
+                  let windowEnd = SupabaseDateParser.date(from: first.windowEnd),
+                  windowStart < windowEnd,
+                  first.bucketMinutes == range.chartIntervalMinutes else {
+                chartCache[key] = .failed("Chart time range could not be verified. Please retry.")
+                return
+            }
+            chartCache[key] = .loaded(MetricChartSeries(
+                metric: metric,
+                points: points,
+                windowStart: windowStart,
+                windowEnd: windowEnd,
+                intervalMinutes: range.chartIntervalMinutes
+            ))
         } catch {
+            guard revision == chartCacheRevision, canAccessMonitoring else { return }
             guard !Self.isCancellation(error) else {
                 chartCache[key] = .initial
                 return
@@ -339,7 +374,8 @@ final class MonitoringStore {
     }
 
     func nodes(for application: ApplicationSnapshot) -> [NodeSnapshot] {
-        nodeCache[application.id] ?? []
+        let now = Date.now
+        return (nodeCache[application.id] ?? []).filter { $0.isReporting(asOf: now) }
     }
 
     func loadNodes(for application: ApplicationSnapshot) async -> [NodeSnapshot] {
@@ -354,7 +390,8 @@ final class MonitoringStore {
                     accessToken: accessToken
                 )
             }
-            let nodes = dtos.map(SupabaseModelMapper.node(from:))
+            let now = Date.now
+            let nodes = dtos.map(SupabaseModelMapper.node(from:)).filter { $0.isReporting(asOf: now) }
             nodeCache[application.id] = nodes
             return nodes
         } catch {
@@ -479,10 +516,6 @@ final class MonitoringStore {
         dataState = .failed(message: message)
         errorMessage = message
         chartCacheRevision += 1
-    }
-
-    private static func chartPointLimit(for range: MonitoringTimeRange) -> Int {
-        min(max(range.minutes / 2, 40), 500)
     }
 
     private static func isCancellation(_ error: Error) -> Bool {

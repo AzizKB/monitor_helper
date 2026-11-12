@@ -71,6 +71,36 @@ struct SupabaseRESTClient {
         return try await perform(request, as: SupabaseAuthSession.self)
     }
 
+    func requestPasswordReset(email: String) async throws {
+        _ = try await responseData(authRequest(path: "recover", body: ["email": email]))
+    }
+
+    func resendConfirmation(email: String) async throws {
+        _ = try await responseData(authRequest(path: "resend", body: ["email": email, "type": "signup"]))
+    }
+
+    func verifyEmailCode(email: String, code: String, purpose: EmailVerificationPurpose) async throws -> SupabaseAuthSession {
+        try await perform(authRequest(path: "verify", body: ["email": email, "token": code, "type": purpose.rawValue]), as: SupabaseAuthSession.self)
+    }
+
+    func updatePassword(_ password: String, accessToken: String) async throws {
+        _ = try await responseData(authRequest(path: "user", method: "PUT", body: ["password": password], accessToken: accessToken))
+    }
+
+    func revokeSessions(accessToken: String) async throws {
+        _ = try await responseData(authRequest(path: "logout", body: [:], accessToken: accessToken))
+    }
+
+    private func authRequest(path: String, method: String = "POST", body: [String: String], accessToken: String? = nil) throws -> URLRequest {
+        var request = URLRequest(url: url(path: "/auth/v1/\(path)"))
+        request.httpMethod = method
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let accessToken { request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try JSONEncoder().encode(body)
+        return request
+    }
+
     func fetchMobileAccessStatus(accessToken: String) async throws -> [SupabaseMobileAccessDTO] {
         var request = URLRequest(url: url(path: "/rest/v1/rpc/get_mobile_access_status"))
         request.httpMethod = "POST"
@@ -82,7 +112,7 @@ struct SupabaseRESTClient {
     }
 
     func fetchMonitorApplications(minutes: Int, accessToken: String) async throws -> [SupabaseMonitorApplicationDTO] {
-        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_monitor_applications"))
+        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_monitor_applications_v2"))
         request.httpMethod = "POST"
         applyReadHeaders(to: &request, accessToken: accessToken)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -109,10 +139,10 @@ struct SupabaseRESTClient {
         applicationID: UUID,
         metricKey: String,
         minutes: Int,
-        limit: Int,
+        endAt: Date,
         accessToken: String
     ) async throws -> [SupabaseChartPointDTO] {
-        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_application_metric_chart"))
+        var request = URLRequest(url: url(path: "/rest/v1/rpc/get_application_metric_chart_series"))
         request.httpMethod = "POST"
         applyReadHeaders(to: &request, accessToken: accessToken)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -121,7 +151,7 @@ struct SupabaseRESTClient {
                 applicationID: applicationID.uuidString,
                 metricKey: metricKey,
                 minutes: minutes,
-                limit: limit
+                endAt: endAt.ISO8601Format()
             )
         )
 
@@ -159,6 +189,16 @@ struct SupabaseRESTClient {
     }
 
     private func perform<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
+        let data = try await responseData(request)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            // Auth responses can contain tokens. Never include response bodies in errors.
+            throw SupabaseRESTError.decodingFailed("The response format was not recognized.")
+        }
+    }
+
+    private func responseData(_ request: URLRequest) async throws -> Data {
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -170,14 +210,7 @@ struct SupabaseRESTClient {
             throw SupabaseRESTError.requestFailed(httpResponse.statusCode, message)
         }
 
-        let decoder = JSONDecoder()
-        do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            let body = String(data: data, encoding: .utf8) ?? "No response body"
-            let preview = String(body.prefix(800))
-            throw SupabaseRESTError.decodingFailed("\(error.localizedDescription). Response: \(preview)")
-        }
+        return data
     }
 }
 
@@ -201,13 +234,13 @@ private struct ApplicationMetricChartRequest: Encodable {
     let applicationID: String
     let metricKey: String
     let minutes: Int
-    let limit: Int
+    let endAt: String
 
     enum CodingKeys: String, CodingKey {
         case applicationID = "p_application_id"
         case metricKey = "p_metric_key"
         case minutes = "p_window_minutes"
-        case limit = "p_limit"
+        case endAt = "p_end_at"
     }
 }
 

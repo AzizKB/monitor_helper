@@ -40,7 +40,7 @@ struct InfrastructureHealthDashboardView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Infra Health")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: selectedApplication?.id) {
+        .task(id: selectedApplication) {
             if let selectedApplication {
                 _ = await loadNodes(selectedApplication)
             }
