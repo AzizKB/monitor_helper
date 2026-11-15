@@ -20,7 +20,7 @@ struct InfrastructureDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     SummaryTileView(
                         title: "Infrastructure Status",
@@ -51,31 +51,28 @@ struct InfrastructureDetailView: View {
                     )
                 }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Nodes")
-                        .font(.headline)
+                Text("Nodes").font(.headline)
 
-                    if isLoadingNodes {
-                        VStack(spacing: 10) {
-                            ProgressView()
+                if isLoadingNodes {
+                    VStack(spacing: 10) {
+                        ProgressView()
 
-                            Text("Loading node details")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 24)
-                    } else if nodes.isEmpty {
-                        ContentUnavailableView(
-                            "No Node Data",
-                            systemImage: "server.rack",
-                            description: Text("Infrastructure details will appear when node metrics are available.")
-                        )
-                        .padding(.vertical, 12)
-                    } else {
-                        ForEach(nodes) { node in
-                            NodePerformanceRow(node: node)
-                        }
+                        Text("Loading node details")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+                } else if nodes.isEmpty {
+                    ContentUnavailableView(
+                        "No Node Data",
+                        systemImage: "server.rack",
+                        description: Text("Infrastructure details will appear when node metrics are available.")
+                    )
+                    .padding(.vertical, 12)
+                } else {
+                    ForEach(nodes) { node in
+                        NodePerformanceRow(node: node)
                     }
                 }
             }
@@ -84,11 +81,13 @@ struct InfrastructureDetailView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Infrastructure")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: application) {
+        .task(id: InfrastructureLoadKey(application: application)) {
             if let loadNodes {
                 isLoadingNodes = initialNodes.isEmpty
                 defer { isLoadingNodes = false }
-                loadedNodes = await loadNodes()
+                let nodes = await loadNodes()
+                guard !Task.isCancelled else { return }
+                loadedNodes = nodes
             }
         }
     }

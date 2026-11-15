@@ -14,8 +14,8 @@ enum SupabaseRESTError: LocalizedError {
         switch self {
         case .invalidResponse:
             return "Supabase returned an invalid response."
-        case let .requestFailed(statusCode, message):
-            return "Supabase request failed (\(statusCode)): \(message)"
+        case let .requestFailed(statusCode, _):
+            return "The server could not complete the request (\(statusCode))."
         case let .decodingFailed(message):
             return "Supabase response could not be decoded: \(message)"
         }
@@ -23,6 +23,13 @@ enum SupabaseRESTError: LocalizedError {
 }
 
 struct SupabaseRESTClient {
+    private static let privateSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration)
+    }()
+
     private let projectURL: URL
     private let publishableKey: String
     private let session: URLSession
@@ -30,11 +37,11 @@ struct SupabaseRESTClient {
     init(
         projectURL: URL = SupabaseConfiguration.projectURL,
         publishableKey: String = SupabaseConfiguration.publishableKey,
-        session: URLSession = .shared
+        session: URLSession? = nil
     ) {
         self.projectURL = projectURL
         self.publishableKey = publishableKey
-        self.session = session
+        self.session = session ?? Self.privateSession
     }
 
     func signIn(email: String, password: String) async throws -> SupabaseAuthSession {
@@ -87,9 +94,14 @@ struct SupabaseRESTClient {
         _ = try await responseData(authRequest(path: "user", method: "PUT", body: ["password": password], accessToken: accessToken))
     }
 
-    func revokeSessions(accessToken: String) async throws {
-        _ = try await responseData(authRequest(path: "logout", body: [:], accessToken: accessToken))
+    func revokeSessions(accessToken: String, scope: SignOutScope = .global) async throws {
+        var request = try authRequest(path: "logout", body: [:], accessToken: accessToken)
+        request.url?.append(queryItems: [URLQueryItem(name: "scope", value: scope.rawValue)])
+        request.timeoutInterval = 10
+        _ = try await responseData(request)
     }
+
+    enum SignOutScope: String { case local, global }
 
     private func authRequest(path: String, method: String = "POST", body: [String: String], accessToken: String? = nil) throws -> URLRequest {
         var request = URLRequest(url: url(path: "/auth/v1/\(path)"))
@@ -199,6 +211,8 @@ struct SupabaseRESTClient {
     }
 
     private func responseData(_ request: URLRequest) async throws -> Data {
+        var request = request
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {

@@ -57,7 +57,7 @@ struct MonitorTabView: View {
                     selectedTimeRange: store.selectedTimeRange,
                     lastLoadedAt: store.lastLoadedAt,
                     errorMessage: store.errorMessage,
-                    signOut: store.signOut
+                    signOut: { _ = store.signOut() }
                 )
             }
             .tabItem {

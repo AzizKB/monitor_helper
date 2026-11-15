@@ -40,7 +40,14 @@ enum SupabaseSessionStoreError: LocalizedError {
     }
 }
 
-struct SupabaseSessionStore {
+@MainActor
+protocol MonitoringSessionStorage {
+    func load() throws -> StoredSupabaseSession?
+    func save(_ session: StoredSupabaseSession) throws
+    func clear() throws
+}
+
+struct SupabaseSessionStore: MonitoringSessionStorage {
     private let service = "monitor_helper.supabase.session"
     private let account = "authenticated-session"
 
@@ -78,7 +85,7 @@ struct SupabaseSessionStore {
         var query = baseQuery()
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)

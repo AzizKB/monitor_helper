@@ -20,7 +20,7 @@ struct InfrastructureHealthDashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 Picker("Application", selection: bindingSelection) {
                     ForEach(applications) { application in
                         Text(application.displayName)
@@ -32,7 +32,8 @@ struct InfrastructureHealthDashboardView: View {
 
                 if let selectedApplication {
                     infrastructureSummary(for: selectedApplication)
-                    nodeSection(for: selectedApplication)
+                    Text("Node Performance").font(.headline)
+                    nodeRows(for: selectedApplication)
                 }
             }
             .padding(AppTheme.screenPadding)
@@ -40,7 +41,7 @@ struct InfrastructureHealthDashboardView: View {
         .background(AppTheme.groupedBackground)
         .navigationTitle("Infra Health")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: selectedApplication) {
+        .task(id: InfrastructureLoadKey(application: selectedApplication)) {
             if let selectedApplication {
                 _ = await loadNodes(selectedApplication)
             }
@@ -104,24 +105,20 @@ struct InfrastructureHealthDashboardView: View {
         }
     }
 
-    private func nodeSection(for application: ApplicationSnapshot) -> some View {
+    @ViewBuilder
+    private func nodeRows(for application: ApplicationSnapshot) -> some View {
         let nodes = nodesProvider(application)
 
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("Node Performance")
-                .font(.headline)
-
-            if nodes.isEmpty {
-                ContentUnavailableView(
-                    "No Node Data",
-                    systemImage: "server.rack",
-                    description: Text("Node metrics will appear when the collector receives infrastructure data for this application.")
-                )
-                .padding(.vertical, 12)
-            } else {
-                ForEach(nodes) { node in
-                    NodePerformanceRow(node: node)
-                }
+        if nodes.isEmpty {
+            ContentUnavailableView(
+                "No Node Data",
+                systemImage: "server.rack",
+                description: Text("Node metrics will appear when the collector receives infrastructure data for this application.")
+            )
+            .padding(.vertical, 12)
+        } else {
+            ForEach(nodes) { node in
+                NodePerformanceRow(node: node)
             }
         }
     }
@@ -138,6 +135,16 @@ struct InfrastructureHealthDashboardView: View {
         if value >= 95 { return .red }
         if value >= 75 { return .orange }
         return .green
+    }
+}
+
+struct InfrastructureLoadKey: Hashable {
+    let applicationID: UUID?
+    let collectorSync: Date?
+
+    init(application: ApplicationSnapshot?) {
+        applicationID = application?.id
+        collectorSync = application?.lastSuccessfulSyncAt
     }
 }
 

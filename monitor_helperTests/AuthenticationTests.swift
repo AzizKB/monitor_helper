@@ -121,14 +121,106 @@ struct EmailVerificationFlowTests {
             #expect(!error.localizedDescription.contains("sensitive-token"))
         }
     }
+
+    @Test func httpFailureDescriptionDoesNotExposeBackendBody() {
+        let error = SupabaseRESTError.requestFailed(500, "private-backend-data")
+        #expect(!error.localizedDescription.contains("private-backend-data"))
+    }
+
+    @Test func signOutDuringTokenRefreshCannotRestoreTheSession() async throws {
+        let client = client()
+        let storage = TestSessionStorage(session: Self.expiringSession)
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        AuthURLProtocol.setResponse {
+            if $0.url?.path == "/auth/v1/token" {
+                signal.yield(())
+                _ = release.wait(timeout: .now() + 5)
+                return (200, Self.rotatedSession)
+            }
+            return (204, "")
+        }
+        let store = MonitoringStore(client: client, sessionStore: storage)
+        let bootstrap = Task { await store.bootstrap(); signal.finish() }
+        var iterator = started.makeAsyncIterator()
+        try #require(await iterator.next() != nil)
+        let revocation = store.signOut()
+        release.signal()
+        signal.finish()
+        await bootstrap.value
+        await revocation?.value
+
+        #expect(!store.isAuthenticated)
+        #expect(store.applications.isEmpty)
+        #expect(storage.session == nil)
+        #expect(storage.saveCount == 0)
+        let logout = try #require(AuthURLProtocol.requests().first { $0.url?.path == "/auth/v1/logout" })
+        #expect(URLComponents(url: logout.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains(URLQueryItem(name: "scope", value: "local")) == true)
+    }
+
+    @Test func concurrentAccessChecksShareOneTokenRotation() async throws {
+        let client = client()
+        let storage = TestSessionStorage(session: Self.expiringSession)
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        AuthURLProtocol.setResponse {
+            if $0.url?.path == "/auth/v1/token" {
+                signal.yield(())
+                _ = release.wait(timeout: .now() + 5)
+                return (200, Self.rotatedSession)
+            }
+            return (200, #"[{"status":"approved"}]"#)
+        }
+        let store = MonitoringStore(client: client, sessionStore: storage)
+        let bootstrap = Task { await store.bootstrap(); signal.finish() }
+        var iterator = started.makeAsyncIterator()
+        try #require(await iterator.next() != nil)
+        let check = Task { await store.refreshMobileAccessStatus() }
+        while !store.isCheckingAccess { await Task.yield() }
+        release.signal()
+        signal.finish()
+        await bootstrap.value
+        await check.value
+
+        #expect(store.canAccessMonitoring)
+        #expect(storage.saveCount == 1)
+        #expect(AuthURLProtocol.requests().filter { $0.url?.path == "/auth/v1/token" }.count == 1)
+    }
+
+    private static var expiringSession: StoredSupabaseSession {
+        StoredSupabaseSession(accessToken: "before-rotation", refreshToken: "test-refresh",
+                              expiresAt: .distantPast, userID: nil, userEmail: nil)
+    }
+
+    nonisolated private static var rotatedSession: String {
+        #"{"access_token":"after-rotation","refresh_token":"rotated-test-refresh","expires_in":3600}"#
+    }
+}
+
+@MainActor
+private final class TestSessionStorage: MonitoringSessionStorage {
+    var session: StoredSupabaseSession?
+    private(set) var saveCount = 0
+
+    init(session: StoredSupabaseSession?) { self.session = session }
+    func load() throws -> StoredSupabaseSession? { session }
+    func save(_ session: StoredSupabaseSession) throws {
+        saveCount += 1
+        self.session = session
+    }
+    func clear() throws { session = nil }
 }
 
 private final class AuthURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated private static let lock = NSLock()
     nonisolated(unsafe) private static var captured: [URLRequest] = []
     nonisolated(unsafe) private static var malformed = false
+    nonisolated(unsafe) private static var response: (@Sendable (URLRequest) -> (Int, String))?
 
-    nonisolated static func reset() { lock.lock(); defer { lock.unlock() }; captured = []; malformed = false }
+    nonisolated static func reset() { lock.lock(); defer { lock.unlock() }; captured = []; malformed = false; response = nil }
+    nonisolated static func setResponse(_ handler: @escaping @Sendable (URLRequest) -> (Int, String)) {
+        lock.lock(); defer { lock.unlock() }; response = handler
+    }
     nonisolated static func useMalformedResponse() { lock.lock(); defer { lock.unlock() }; malformed = true }
     nonisolated static func requests() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return captured }
     nonisolated override class func canInit(with request: URLRequest) -> Bool { true }
@@ -144,10 +236,12 @@ private final class AuthURLProtocol: URLProtocol, @unchecked Sendable {
             }
             savedRequest.httpBody = data
         }
-        Self.lock.lock(); Self.captured.append(savedRequest); let malformed = Self.malformed; Self.lock.unlock()
+        Self.lock.lock(); Self.captured.append(savedRequest); let malformed = Self.malformed; let custom = Self.response; Self.lock.unlock()
         let path = request.url!.path
-        let status = path.hasSuffix("logout") ? 204 : 200
-        let body = path.hasSuffix("verify") ? (malformed ? #"{"access_token":"sensitive-token","expires_in":"invalid-integer"}"# : #"{"access_token":"test-token","refresh_token":"test-refresh","expires_in":3600,"user":{"id":"test-user","email":"u@example.com"}}"#) : "{}"
+        let (status, body) = custom?(savedRequest) ?? (
+            path.hasSuffix("logout") ? 204 : 200,
+            path.hasSuffix("verify") ? (malformed ? #"{"access_token":"sensitive-token","expires_in":"invalid-integer"}"# : #"{"access_token":"test-token","refresh_token":"test-refresh","expires_in":3600,"user":{"id":"test-user","email":"u@example.com"}}"#) : "{}"
+        )
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
         if status != 204 { client?.urlProtocol(self, didLoad: Data(body.utf8)) }
         client?.urlProtocolDidFinishLoading(self)

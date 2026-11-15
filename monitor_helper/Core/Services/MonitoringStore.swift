@@ -9,9 +9,23 @@ import Observation
 @MainActor
 @Observable
 final class MonitoringStore {
-    private let supabaseClient = SupabaseRESTClient()
+    private let supabaseClient: SupabaseRESTClient
     private let realtimeSyncListener = SupabaseRealtimeSyncListener()
-    private let sessionStore = SupabaseSessionStore()
+    private let sessionStore: any MonitoringSessionStorage
+    private var sessionEpoch = UUID()
+    private var refreshTask: Task<Void, Error>?
+    private var accessCheckID: UUID?
+    private var lastAccessCheckAt: Date?
+    private var refreshQueued = false
+    private var summaryRefreshID: UUID?
+    private var summaryRangeInFlight: MonitoringTimeRange?
+    private var chartAnchor: Date?
+    private var nodeCacheFetchedAt: [UUID: Date] = [:]
+
+    init(client: SupabaseRESTClient? = nil, sessionStore: (any MonitoringSessionStorage)? = nil) {
+        self.supabaseClient = client ?? SupabaseRESTClient()
+        self.sessionStore = sessionStore ?? SupabaseSessionStore()
+    }
     private var cachedApplications: [ApplicationSnapshot] = []
     private var applicationCacheByRange: [MonitoringTimeRange: [ApplicationSnapshot]] = [:]
     private var nodeCache: [UUID: [NodeSnapshot]] = [:]
@@ -50,6 +64,7 @@ final class MonitoringStore {
         isRestoringSession = true
         defer { isRestoringSession = false }
 
+        let epoch = sessionEpoch
         do {
             guard let storedSession = try sessionStore.load() else {
                 dataState = .initial
@@ -67,7 +82,12 @@ final class MonitoringStore {
 
             await refreshMobileAccessStatus()
         } catch {
-            expireSession(message: "Your saved session could not be restored. Please sign in again.")
+            guard epoch == sessionEpoch else { return }
+            if session != nil {
+                errorMessage = AuthenticationMessage.error(error, action: .checkAccess)
+            } else {
+                expireSession(message: "Your saved session could not be restored. Please sign in again.")
+            }
         }
     }
 
@@ -79,13 +99,16 @@ final class MonitoringStore {
         signUpMessage = nil
         defer { isSigningIn = false }
 
+        let epoch = sessionEpoch
         do {
             let authSession = try await supabaseClient.signIn(email: email, password: password)
+            guard epoch == sessionEpoch, !Task.isCancelled else { return }
             let storedSession = StoredSupabaseSession(authSession: authSession)
             try sessionStore.save(storedSession)
             session = storedSession
             await refreshMobileAccessStatus()
         } catch {
+            guard epoch == sessionEpoch, !Self.isCancellation(error) else { return }
             errorMessage = AuthenticationMessage.error(error, action: .signIn)
         }
     }
@@ -99,8 +122,10 @@ final class MonitoringStore {
         signUpMessage = nil
         defer { isSigningUp = false }
 
+        let epoch = sessionEpoch
         do {
             let response = try await supabaseClient.signUp(email: email, password: password)
+            guard epoch == sessionEpoch, !Task.isCancelled else { return false }
 
             if let authSession = response.session {
                 let storedSession = StoredSupabaseSession(authSession: authSession)
@@ -112,6 +137,7 @@ final class MonitoringStore {
             signUpMessage = "Account created. Confirm your email, then wait for admin approval."
             return true
         } catch {
+            guard epoch == sessionEpoch, !Self.isCancellation(error) else { return false }
             errorMessage = AuthenticationMessage.error(error, action: .signUp)
             return false
         }
@@ -137,14 +163,24 @@ final class MonitoringStore {
             return
         }
 
+        let epoch = sessionEpoch
+        let checkID = UUID()
+        accessCheckID = checkID
         isCheckingAccess = true
-        defer { isCheckingAccess = false }
+        defer {
+            if accessCheckID == checkID {
+                accessCheckID = nil
+                isCheckingAccess = false
+            }
+        }
 
         do {
             let dtos = try await authenticatedRequest { accessToken in
                 try await supabaseClient.fetchMobileAccessStatus(accessToken: accessToken)
             }
 
+            guard epoch == sessionEpoch, accessCheckID == checkID, !Task.isCancelled else { return }
+            lastAccessCheckAt = .now
             accessStatus = dtos.first.map(SupabaseModelMapper.mobileAccess(from:)) ?? MobileAccessStatus(
                 userID: nil,
                 email: session?.userEmail,
@@ -156,9 +192,13 @@ final class MonitoringStore {
 
             if accessStatus.isApproved {
                 errorMessage = nil
+            } else {
+                clearMonitoringData()
             }
         } catch {
-            guard !Self.isCancellation(error) else { return }
+            guard epoch == sessionEpoch, accessCheckID == checkID, !Self.isCancellation(error) else { return }
+            lastAccessCheckAt = nil
+            clearMonitoringData()
             errorMessage = AuthenticationMessage.error(error, action: .checkAccess)
             accessStatus = MobileAccessStatus(
                 userID: nil,
@@ -171,17 +211,44 @@ final class MonitoringStore {
         }
     }
 
-    func signOut() {
+    @discardableResult
+    func signOut() -> Task<Void, Never>? {
+        let token = session?.accessToken
+        resetSession()
+        errorMessage = nil
+        guard let token else { return nil }
+        // Clear the device immediately, even if network revocation cannot complete.
+        return Task { [supabaseClient] in
+            try? await supabaseClient.revokeSessions(accessToken: token, scope: .local)
+        }
+    }
+
+    private func resetSession() {
+        sessionEpoch = UUID()
+        refreshTask?.cancel()
+        refreshTask = nil
+        accessCheckID = nil
+        isCheckingAccess = false
+        lastAccessCheckAt = nil
+        summaryRefreshID = nil
+        summaryRangeInFlight = nil
+        isRefreshing = false
+        refreshQueued = false
         try? sessionStore.clear()
         session = nil
         accessStatus = .unknown
         signUpMessage = nil
-        errorMessage = nil
+        clearMonitoringData()
+    }
+
+    private func clearMonitoringData() {
         isUsingLiveData = false
         hasLoadedLiveData = false
         lastRealtimeSyncKey = nil
+        chartAnchor = nil
         applicationCacheByRange.removeAll()
         nodeCache.removeAll()
+        nodeCacheFetchedAt.removeAll()
         incidentCache.removeAll()
         chartCache.removeAll()
         applications = []
@@ -192,27 +259,31 @@ final class MonitoringStore {
     }
 
     func refresh() async {
-        guard !isRefreshing else { return }
-
+        guard canAccessMonitoring else { return }
+        if isRefreshing {
+            if summaryRangeInFlight != selectedTimeRange { refreshQueued = true }
+            return
+        }
+        let refreshID = UUID()
+        summaryRefreshID = refreshID
         isRefreshing = true
+        defer {
+            if summaryRefreshID == refreshID {
+                isRefreshing = false
+                summaryRangeInFlight = nil
+                summaryRefreshID = nil
+            }
+        }
+        repeat {
+            refreshQueued = false
+            await refreshSnapshot(for: selectedTimeRange)
+        } while summaryRefreshID == refreshID && refreshQueued && canAccessMonitoring && !Task.isCancelled
+    }
+
+    private func refreshSnapshot(for range: MonitoringTimeRange) async {
+        let epoch = sessionEpoch
+        summaryRangeInFlight = range
         errorMessage = nil
-        defer { isRefreshing = false }
-
-        guard session != nil else {
-            applications = cachedApplications
-            lastLoadedAt = Date.now
-            return
-        }
-
-        guard canAccessMonitoring else {
-            applications = []
-            cachedApplications = []
-            isUsingLiveData = false
-            hasLoadedLiveData = false
-            dataState = .initial
-            return
-        }
-
         if !hasLoadedLiveData {
             dataState = .loading
         }
@@ -220,34 +291,45 @@ final class MonitoringStore {
         do {
             let dtos = try await authenticatedRequest { accessToken in
                 try await supabaseClient.fetchMonitorApplications(
-                    minutes: selectedTimeRange.minutes,
+                    minutes: range.minutes,
                     accessToken: accessToken
                 )
             }
+            guard epoch == sessionEpoch, canAccessMonitoring, !Task.isCancelled else { return }
+            guard selectedTimeRange == range else {
+                refreshQueued = true
+                return
+            }
             let snapshots = dtos.map(SupabaseModelMapper.application(from:))
+            let previousSync = applications.compactMap(\.lastSuccessfulSyncAt).max()
+            let currentSync = snapshots.compactMap(\.lastSuccessfulSyncAt).max()
+            let changedInventory = Set(applications.map(\.id)) != Set(snapshots.map(\.id))
+            let windowNeedsUpdate = chartAnchor.map { Date.now.timeIntervalSince($0) >= 300 } ?? true
+            let invalidateCharts = windowNeedsUpdate || previousSync != currentSync || changedInventory
             applications = snapshots
             cachedApplications = snapshots
-            applicationCacheByRange[selectedTimeRange] = snapshots
+            applicationCacheByRange[range] = snapshots
             isUsingLiveData = true
             hasLoadedLiveData = true
             lastLoadedAt = Date.now
             dataState = snapshots.isEmpty ? .empty : .live
-            chartCache.removeAll()
-            chartCacheRevision += 1
-            print("Supabase refresh succeeded: \(snapshots.count) applications for \(selectedTimeRange.displayName)")
+            if invalidateCharts {
+                chartAnchor = lastLoadedAt
+                chartCache.removeAll()
+                chartCacheRevision += 1
+            }
         } catch {
-            guard !Self.isCancellation(error) else {
-                print("Supabase refresh cancelled")
+            guard epoch == sessionEpoch, canAccessMonitoring, !Self.isCancellation(error) else { return }
+            guard selectedTimeRange == range else {
+                refreshQueued = true
                 return
             }
-
             isUsingLiveData = hasLoadedLiveData
             applications = cachedApplications
             errorMessage = error.localizedDescription
             dataState = hasLoadedLiveData
                 ? .cached(lastUpdated: lastLoadedAt ?? .now)
                 : .failed(message: error.localizedDescription)
-            print("Supabase refresh failed: \(error.localizedDescription)")
         }
     }
 
@@ -293,6 +375,10 @@ final class MonitoringStore {
             return
         }
 
+        if case .empty = chartCache[key] {
+            return
+        }
+
         guard application.hasApplicationMetrics else {
             chartCache[key] = .empty
             return
@@ -305,7 +391,7 @@ final class MonitoringStore {
 
         chartCache[key] = .loading
         let revision = chartCacheRevision
-        let requestedEnd = lastLoadedAt ?? .now
+        let requestedEnd = chartAnchor ?? .now
 
         do {
             let dtos = try await authenticatedRequest { accessToken in
@@ -368,21 +454,30 @@ final class MonitoringStore {
             lastRealtimeSyncKey = syncKey
 
             try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            await recheckAccessIfNeeded()
             await refresh()
-            print("Supabase realtime sync refresh completed: \(syncKey)")
         }
     }
 
+    func recheckAccessIfNeeded(maxAge: TimeInterval = 60) async {
+        guard !isCheckingAccess, session != nil else { return }
+        if let lastAccessCheckAt, Date.now.timeIntervalSince(lastAccessCheckAt) < maxAge { return }
+        await refreshMobileAccessStatus()
+    }
+
     func nodes(for application: ApplicationSnapshot) -> [NodeSnapshot] {
+        guard canAccessMonitoring else { return [] }
         let now = Date.now
         return (nodeCache[application.id] ?? []).filter { $0.isReporting(asOf: now) }
     }
 
     func loadNodes(for application: ApplicationSnapshot) async -> [NodeSnapshot] {
-        guard canAccessMonitoring else {
+        guard canAccessMonitoring else { return [] }
+        if let fetchedAt = nodeCacheFetchedAt[application.id], Date.now.timeIntervalSince(fetchedAt) < 30 {
             return nodes(for: application)
         }
-
+        let epoch = sessionEpoch
         do {
             let dtos = try await authenticatedRequest { accessToken in
                 try await supabaseClient.fetchNodes(
@@ -390,11 +485,14 @@ final class MonitoringStore {
                     accessToken: accessToken
                 )
             }
+            guard epoch == sessionEpoch, canAccessMonitoring, !Task.isCancelled else { return [] }
             let now = Date.now
             let nodes = dtos.map(SupabaseModelMapper.node(from:)).filter { $0.isReporting(asOf: now) }
             nodeCache[application.id] = nodes
+            nodeCacheFetchedAt[application.id] = now
             return nodes
         } catch {
+            guard epoch == sessionEpoch, canAccessMonitoring else { return [] }
             guard !Self.isCancellation(error) else {
                 return nodes(for: application)
             }
@@ -405,14 +503,12 @@ final class MonitoringStore {
     }
 
     func incidents(for application: ApplicationSnapshot) -> [IncidentSnapshot] {
-        incidentCache[application.id] ?? []
+        canAccessMonitoring ? incidentCache[application.id] ?? [] : []
     }
 
     func loadIncidents(for application: ApplicationSnapshot) async -> [IncidentSnapshot] {
-        guard canAccessMonitoring else {
-            return incidents(for: application)
-        }
-
+        guard canAccessMonitoring else { return [] }
+        let epoch = sessionEpoch
         do {
             let dtos = try await authenticatedRequest { accessToken in
                 try await supabaseClient.fetchIncidents(
@@ -421,10 +517,12 @@ final class MonitoringStore {
                     accessToken: accessToken
                 )
             }
+            guard epoch == sessionEpoch, canAccessMonitoring, !Task.isCancelled else { return [] }
             let incidents = dtos.map(SupabaseModelMapper.incident(from:))
             incidentCache[application.id] = incidents
             return incidents
         } catch {
+            guard epoch == sessionEpoch, canAccessMonitoring else { return [] }
             guard !Self.isCancellation(error) else {
                 return incidents(for: application)
             }
@@ -437,85 +535,96 @@ final class MonitoringStore {
     private func authenticatedRequest<T>(
         _ operation: (String) async throws -> T
     ) async throws -> T {
+        let epoch = sessionEpoch
         let accessToken = try await validAccessToken()
+        try requireCurrentSession(epoch)
 
         do {
-            return try await operation(accessToken)
+            let result = try await operation(accessToken)
+            try requireCurrentSession(epoch)
+            return result
         } catch SupabaseRESTError.requestFailed(401, _) {
-            try await refreshStoredSession()
-
-            guard let refreshedAccessToken = session?.accessToken else {
-                throw SupabaseRESTError.requestFailed(401, "Your session expired. Please sign in again.")
+            try requireCurrentSession(epoch)
+            if session?.accessToken == accessToken {
+                try await refreshStoredSession()
             }
 
+            try requireCurrentSession(epoch)
+            guard let refreshedAccessToken = session?.accessToken else { throw CancellationError() }
             do {
-                return try await operation(refreshedAccessToken)
+                let result = try await operation(refreshedAccessToken)
+                try requireCurrentSession(epoch)
+                return result
             } catch SupabaseRESTError.requestFailed(401, _) {
-                expireSession(message: "Your session expired. Please sign in again.")
-                throw SupabaseRESTError.requestFailed(401, "Your session expired. Please sign in again.")
+                try requireCurrentSession(epoch)
+                if session?.accessToken == refreshedAccessToken {
+                    expireSession(message: "Your session expired. Please sign in again.")
+                }
+                throw CancellationError()
             }
         }
     }
 
-    private func validAccessToken() async throws -> String {
-        guard let currentSession = session else {
-            throw SupabaseRESTError.requestFailed(401, "Your session expired. Please sign in again.")
-        }
+    private func requireCurrentSession(_ epoch: UUID) throws {
+        guard sessionEpoch == epoch, session != nil else { throw CancellationError() }
+        try Task.checkCancellation()
+    }
 
+    private func validAccessToken() async throws -> String {
+        let epoch = sessionEpoch
+        guard let currentSession = session else { throw CancellationError() }
         if currentSession.isExpiringSoon() {
             try await refreshStoredSession()
         }
-
-        guard let accessToken = session?.accessToken else {
-            throw SupabaseRESTError.requestFailed(401, "Your session expired. Please sign in again.")
-        }
-
+        try requireCurrentSession(epoch)
+        guard let accessToken = session?.accessToken else { throw CancellationError() }
         return accessToken
     }
 
     private func refreshStoredSession() async throws {
-        guard let currentSession = session, let refreshToken = currentSession.refreshToken else {
+        let epoch = sessionEpoch
+        if let refreshTask {
+            try await refreshTask.value
+            try requireCurrentSession(epoch)
+            return
+        }
+        guard let currentSession = session, let refreshToken = currentSession.refreshToken, !refreshToken.isEmpty else {
             expireSession(message: "Your session expired. Please sign in again.")
-            throw SupabaseRESTError.requestFailed(401, "Your session expired. Please sign in again.")
+            throw CancellationError()
         }
 
-        do {
-            let refreshedAuthSession = try await supabaseClient.refreshSession(refreshToken: refreshToken)
-            let refreshedSession = StoredSupabaseSession(authSession: refreshedAuthSession)
-            let mergedSession = StoredSupabaseSession(
-                accessToken: refreshedSession.accessToken,
-                refreshToken: refreshedSession.refreshToken ?? currentSession.refreshToken,
-                expiresAt: refreshedSession.expiresAt,
-                userID: refreshedSession.userID ?? currentSession.userID,
-                userEmail: refreshedSession.userEmail ?? currentSession.userEmail
-            )
-
-            try sessionStore.save(mergedSession)
-            session = mergedSession
-        } catch {
-            expireSession(message: "Your session expired. Please sign in again.")
-            throw error
+        let task = Task {
+            do {
+                let refreshedAuthSession = try await supabaseClient.refreshSession(refreshToken: refreshToken)
+                try requireCurrentSession(epoch)
+                let refreshedSession = StoredSupabaseSession(authSession: refreshedAuthSession)
+                let mergedSession = StoredSupabaseSession(
+                    accessToken: refreshedSession.accessToken,
+                    refreshToken: refreshedSession.refreshToken ?? currentSession.refreshToken,
+                    expiresAt: refreshedSession.expiresAt,
+                    userID: refreshedSession.userID ?? currentSession.userID,
+                    userEmail: refreshedSession.userEmail ?? currentSession.userEmail
+                )
+                try sessionStore.save(mergedSession)
+                session = mergedSession
+            } catch let error as SupabaseRESTError {
+                if case let .requestFailed(status, _) = error,
+                   [400, 401, 403].contains(status), sessionEpoch == epoch {
+                    expireSession(message: "Your session expired. Please sign in again.")
+                }
+                throw error
+            }
         }
+        refreshTask = task
+        defer { if sessionEpoch == epoch { refreshTask = nil } }
+        try await task.value
+        try requireCurrentSession(epoch)
     }
 
     private func expireSession(message: String) {
-        try? sessionStore.clear()
-        session = nil
-        accessStatus = .unknown
-        signUpMessage = nil
-        isUsingLiveData = false
-        hasLoadedLiveData = false
-        lastRealtimeSyncKey = nil
-        applicationCacheByRange.removeAll()
-        nodeCache.removeAll()
-        incidentCache.removeAll()
-        chartCache.removeAll()
-        applications = []
-        cachedApplications = []
-        lastLoadedAt = nil
+        resetSession()
         dataState = .failed(message: message)
         errorMessage = message
-        chartCacheRevision += 1
     }
 
     private static func isCancellation(_ error: Error) -> Bool {

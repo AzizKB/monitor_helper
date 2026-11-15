@@ -32,7 +32,7 @@ final class SupabaseRealtimeSyncListener {
     func successfulSyncEvents(
         accessTokenProvider: @escaping () async throws -> String
     ) -> AsyncStream<SupabaseSyncRunEvent> {
-        AsyncStream { continuation in
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let listenerTask = Task {
                 await listen(accessTokenProvider: accessTokenProvider, continuation: continuation)
             }
@@ -56,7 +56,6 @@ final class SupabaseRealtimeSyncListener {
                 reconnectDelaySeconds = 3
             } catch {
                 guard !Self.isCancellation(error) else { break }
-                print("Supabase realtime listener disconnected: \(error.localizedDescription)")
                 try? await Task.sleep(for: .seconds(reconnectDelaySeconds))
                 reconnectDelaySeconds = min(reconnectDelaySeconds * 2, 60)
             }
@@ -81,19 +80,17 @@ final class SupabaseRealtimeSyncListener {
             socket.cancel(with: .goingAway, reason: nil)
         }
 
-        try await sendJoin(accessToken: accessToken, to: socket)
-        print("Supabase realtime listener connected to sync_runs")
+        try await withTaskCancellationHandler {
+            try await sendJoin(accessToken: accessToken, to: socket)
 
-        while !Task.isCancelled {
-            let message = try await socket.receive()
-
-            guard case let .string(text) = message else {
-                continue
+            while !Task.isCancelled {
+                let message = try await socket.receive()
+                if case let .string(text) = message, let event = syncRunEvent(from: text) {
+                    continuation.yield(event)
+                }
             }
-
-            if let event = syncRunEvent(from: text) {
-                continuation.yield(event)
-            }
+        } onCancel: {
+            socket.cancel(with: .goingAway, reason: nil)
         }
     }
 
