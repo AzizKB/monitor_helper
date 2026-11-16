@@ -13,9 +13,9 @@ final class MonitoringStore {
     private let realtimeSyncListener = SupabaseRealtimeSyncListener()
     private let sessionStore: any MonitoringSessionStorage
     private var sessionEpoch = UUID()
+    private var monitoringEpoch = UUID()
     private var refreshTask: Task<Void, Error>?
     private var accessCheckID: UUID?
-    private var lastAccessCheckAt: Date?
     private var refreshQueued = false
     private var summaryRefreshID: UUID?
     private var summaryRangeInFlight: MonitoringTimeRange?
@@ -53,6 +53,8 @@ final class MonitoringStore {
     var isAuthenticated: Bool {
         session != nil
     }
+
+    var accessMonitorID: UUID? { isAuthenticated ? sessionEpoch : nil }
 
     var canAccessMonitoring: Bool {
         isAuthenticated && accessStatus.isApproved
@@ -180,7 +182,7 @@ final class MonitoringStore {
             }
 
             guard epoch == sessionEpoch, accessCheckID == checkID, !Task.isCancelled else { return }
-            lastAccessCheckAt = .now
+            let wasApproved = accessStatus.isApproved
             accessStatus = dtos.first.map(SupabaseModelMapper.mobileAccess(from:)) ?? MobileAccessStatus(
                 userID: nil,
                 email: session?.userEmail,
@@ -191,13 +193,12 @@ final class MonitoringStore {
             )
 
             if accessStatus.isApproved {
-                errorMessage = nil
+                if !wasApproved { errorMessage = nil }
             } else {
                 clearMonitoringData()
             }
         } catch {
             guard epoch == sessionEpoch, accessCheckID == checkID, !Self.isCancellation(error) else { return }
-            lastAccessCheckAt = nil
             clearMonitoringData()
             errorMessage = AuthenticationMessage.error(error, action: .checkAccess)
             accessStatus = MobileAccessStatus(
@@ -229,11 +230,6 @@ final class MonitoringStore {
         refreshTask = nil
         accessCheckID = nil
         isCheckingAccess = false
-        lastAccessCheckAt = nil
-        summaryRefreshID = nil
-        summaryRangeInFlight = nil
-        isRefreshing = false
-        refreshQueued = false
         try? sessionStore.clear()
         session = nil
         accessStatus = .unknown
@@ -242,6 +238,11 @@ final class MonitoringStore {
     }
 
     private func clearMonitoringData() {
+        monitoringEpoch = UUID()
+        summaryRefreshID = nil
+        summaryRangeInFlight = nil
+        isRefreshing = false
+        refreshQueued = false
         isUsingLiveData = false
         hasLoadedLiveData = false
         lastRealtimeSyncKey = nil
@@ -281,7 +282,7 @@ final class MonitoringStore {
     }
 
     private func refreshSnapshot(for range: MonitoringTimeRange) async {
-        let epoch = sessionEpoch
+        let epoch = monitoringEpoch
         summaryRangeInFlight = range
         errorMessage = nil
         if !hasLoadedLiveData {
@@ -295,7 +296,7 @@ final class MonitoringStore {
                     accessToken: accessToken
                 )
             }
-            guard epoch == sessionEpoch, canAccessMonitoring, !Task.isCancelled else { return }
+            guard epoch == monitoringEpoch, canAccessMonitoring, !Task.isCancelled else { return }
             guard selectedTimeRange == range else {
                 refreshQueued = true
                 return
@@ -319,7 +320,7 @@ final class MonitoringStore {
                 chartCacheRevision += 1
             }
         } catch {
-            guard epoch == sessionEpoch, canAccessMonitoring, !Self.isCancellation(error) else { return }
+            guard epoch == monitoringEpoch, canAccessMonitoring, !Self.isCancellation(error) else { return }
             guard selectedTimeRange == range else {
                 refreshQueued = true
                 return
@@ -455,15 +456,40 @@ final class MonitoringStore {
 
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-            await recheckAccessIfNeeded()
             await refresh()
         }
     }
 
-    func recheckAccessIfNeeded(maxAge: TimeInterval = 60) async {
-        guard !isCheckingAccess, session != nil else { return }
-        if let lastAccessCheckAt, Date.now.timeIntervalSince(lastAccessCheckAt) < maxAge { return }
-        await refreshMobileAccessStatus()
+    func pollMobileAccessWhileActive(interval: Duration = .seconds(5)) async {
+        let epoch = sessionEpoch
+        while session != nil && epoch == sessionEpoch && !Task.isCancelled {
+            do { try await Task.sleep(for: interval) }
+            catch { return }
+            guard session != nil, epoch == sessionEpoch, !Task.isCancelled else { return }
+            guard !isCheckingAccess, accessStatus.isApproved || accessStatus.decision == .unknown else { continue }
+            await refreshMobileAccessStatus()
+        }
+    }
+
+    func listenForMobileAccessChanges() async {
+        guard let id = session?.userID, let userID = UUID(uuidString: id) else { return }
+        let events = realtimeSyncListener.accessChanges(userID: userID) { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.validAccessToken()
+        }
+        await observeMobileAccessChanges(events)
+    }
+
+    func observeMobileAccessChanges(_ events: AsyncStream<Void>) async {
+        let epoch = sessionEpoch
+        for await _ in events {
+            guard session != nil, epoch == sessionEpoch, !Task.isCancelled else { return }
+            // Treat the message as a signal only. Hide cached data before asking
+            // the backend for the authoritative decision, even on a slow network.
+            accessStatus = .unknown
+            clearMonitoringData()
+            await refreshMobileAccessStatus()
+        }
     }
 
     func nodes(for application: ApplicationSnapshot) -> [NodeSnapshot] {
@@ -477,7 +503,7 @@ final class MonitoringStore {
         if let fetchedAt = nodeCacheFetchedAt[application.id], Date.now.timeIntervalSince(fetchedAt) < 30 {
             return nodes(for: application)
         }
-        let epoch = sessionEpoch
+        let epoch = monitoringEpoch
         do {
             let dtos = try await authenticatedRequest { accessToken in
                 try await supabaseClient.fetchNodes(
@@ -485,14 +511,14 @@ final class MonitoringStore {
                     accessToken: accessToken
                 )
             }
-            guard epoch == sessionEpoch, canAccessMonitoring, !Task.isCancelled else { return [] }
+            guard epoch == monitoringEpoch, canAccessMonitoring, !Task.isCancelled else { return [] }
             let now = Date.now
             let nodes = dtos.map(SupabaseModelMapper.node(from:)).filter { $0.isReporting(asOf: now) }
             nodeCache[application.id] = nodes
             nodeCacheFetchedAt[application.id] = now
             return nodes
         } catch {
-            guard epoch == sessionEpoch, canAccessMonitoring else { return [] }
+            guard epoch == monitoringEpoch, canAccessMonitoring else { return [] }
             guard !Self.isCancellation(error) else {
                 return nodes(for: application)
             }
@@ -508,7 +534,7 @@ final class MonitoringStore {
 
     func loadIncidents(for application: ApplicationSnapshot) async -> [IncidentSnapshot] {
         guard canAccessMonitoring else { return [] }
-        let epoch = sessionEpoch
+        let epoch = monitoringEpoch
         do {
             let dtos = try await authenticatedRequest { accessToken in
                 try await supabaseClient.fetchIncidents(
@@ -517,12 +543,12 @@ final class MonitoringStore {
                     accessToken: accessToken
                 )
             }
-            guard epoch == sessionEpoch, canAccessMonitoring, !Task.isCancelled else { return [] }
+            guard epoch == monitoringEpoch, canAccessMonitoring, !Task.isCancelled else { return [] }
             let incidents = dtos.map(SupabaseModelMapper.incident(from:))
             incidentCache[application.id] = incidents
             return incidents
         } catch {
-            guard epoch == sessionEpoch, canAccessMonitoring else { return [] }
+            guard epoch == monitoringEpoch, canAccessMonitoring else { return [] }
             guard !Self.isCancellation(error) else {
                 return incidents(for: application)
             }

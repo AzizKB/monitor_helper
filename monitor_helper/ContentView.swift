@@ -54,13 +54,20 @@ struct ContentView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.automaticRefreshInterval)
                 guard !Task.isCancelled else { return }
-                await store.recheckAccessIfNeeded()
                 await store.refreshIfNeeded(maxAge: 300)
             }
         }
         .task(id: store.canAccessMonitoring && scenePhase == .active) {
             guard store.canAccessMonitoring, scenePhase == .active else { return }
             await store.listenForSyncCompletions()
+        }
+        .task(id: scenePhase == .active ? store.accessMonitorID : nil) {
+            guard scenePhase == .active, store.isAuthenticated else { return }
+            await store.listenForMobileAccessChanges()
+        }
+        .task(id: scenePhase == .active ? store.accessMonitorID : nil) {
+            guard scenePhase == .active, store.isAuthenticated else { return }
+            await store.pollMobileAccessWhileActive()
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { needsForegroundAccessCheck = store.isAuthenticated }

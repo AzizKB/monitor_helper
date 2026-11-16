@@ -115,6 +115,7 @@ struct SupabaseRESTClient {
 
     func fetchMobileAccessStatus(accessToken: String) async throws -> [SupabaseMobileAccessDTO] {
         var request = URLRequest(url: url(path: "/rest/v1/rpc/get_mobile_access_status"))
+        request.timeoutInterval = 5
         request.httpMethod = "POST"
         applyReadHeaders(to: &request, accessToken: accessToken)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

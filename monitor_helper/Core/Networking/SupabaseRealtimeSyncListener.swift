@@ -32,9 +32,55 @@ final class SupabaseRealtimeSyncListener {
     func successfulSyncEvents(
         accessTokenProvider: @escaping () async throws -> String
     ) -> AsyncStream<SupabaseSyncRunEvent> {
+        let channel = "realtime:public:sync_runs"
+        return events(
+            channel: channel,
+            configuration: [
+                "postgres_changes": [["event": "*", "schema": "public", "table": "sync_runs"]]
+            ],
+            accessTokenProvider: accessTokenProvider,
+            decode: syncRunEvent(from:)
+        )
+    }
+
+    func accessChanges(
+        userID: UUID,
+        accessTokenProvider: @escaping () async throws -> String
+    ) -> AsyncStream<Void> {
+        let channel = "realtime:mobile-access:\(userID.uuidString.lowercased())"
+        return events(
+            channel: channel,
+            configuration: ["private": true],
+            accessTokenProvider: accessTokenProvider
+        ) { text in
+            Self.isAccessChangeMessage(text, channel: channel) ? () : nil
+        }
+    }
+
+    static func isAccessChangeMessage(_ text: String, channel: String) -> Bool {
+        guard let message = messageObject(from: text),
+              message["topic"] as? String == channel,
+              message["event"] as? String == "broadcast",
+              let payload = message["payload"] as? [String: Any]
+        else { return false }
+        return payload["event"] as? String == "access_changed"
+    }
+
+    private func events<Event: Sendable>(
+        channel: String,
+        configuration: [String: Any],
+        accessTokenProvider: @escaping () async throws -> String,
+        decode: @escaping (String) -> Event?
+    ) -> AsyncStream<Event> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let listenerTask = Task {
-                await listen(accessTokenProvider: accessTokenProvider, continuation: continuation)
+                await listen(
+                    channel: channel,
+                    configuration: configuration,
+                    accessTokenProvider: accessTokenProvider,
+                    continuation: continuation,
+                    decode: decode
+                )
             }
 
             continuation.onTermination = { _ in
@@ -43,16 +89,21 @@ final class SupabaseRealtimeSyncListener {
         }
     }
 
-    private func listen(
+    private func listen<Event: Sendable>(
+        channel: String,
+        configuration: [String: Any],
         accessTokenProvider: @escaping () async throws -> String,
-        continuation: AsyncStream<SupabaseSyncRunEvent>.Continuation
+        continuation: AsyncStream<Event>.Continuation,
+        decode: (String) -> Event?
     ) async {
         var reconnectDelaySeconds: UInt64 = 3
 
         while !Task.isCancelled {
             do {
                 let accessToken = try await accessTokenProvider()
-                try await connectAndReceive(accessToken: accessToken, continuation: continuation)
+                try await connectAndReceive(channel: channel, configuration: configuration, accessToken: accessToken) {
+                    if let event = decode($0) { continuation.yield(event) }
+                }
                 reconnectDelaySeconds = 3
             } catch {
                 guard !Self.isCancellation(error) else { break }
@@ -65,8 +116,10 @@ final class SupabaseRealtimeSyncListener {
     }
 
     private func connectAndReceive(
+        channel: String,
+        configuration: [String: Any],
         accessToken: String,
-        continuation: AsyncStream<SupabaseSyncRunEvent>.Continuation
+        receive: (String) -> Void
     ) async throws {
         let socket = session.webSocketTask(with: realtimeURL)
         socket.resume()
@@ -81,12 +134,15 @@ final class SupabaseRealtimeSyncListener {
         }
 
         try await withTaskCancellationHandler {
-            try await sendJoin(accessToken: accessToken, to: socket)
+            try await sendJoin(channel: channel, configuration: configuration, accessToken: accessToken, to: socket)
 
             while !Task.isCancelled {
                 let message = try await socket.receive()
-                if case let .string(text) = message, let event = syncRunEvent(from: text) {
-                    continuation.yield(event)
+                if case let .string(text) = message {
+                    if Self.channelClosed(text, channel: channel) {
+                        throw URLError(.networkConnectionLost)
+                    }
+                    receive(text)
                 }
             }
         } onCancel: {
@@ -105,22 +161,17 @@ final class SupabaseRealtimeSyncListener {
         return components.url!
     }
 
-    private func sendJoin(accessToken: String, to socket: URLSessionWebSocketTask) async throws {
+    private func sendJoin(
+        channel: String, configuration: [String: Any], accessToken: String, to socket: URLSessionWebSocketTask
+    ) async throws {
+        let config = configuration.merging([
+            "broadcast": ["self": false], "presence": ["key": ""], "postgres_changes": []
+        ]) { supplied, _ in supplied }
         let payload: [String: Any] = [
-            "topic": "realtime:public:sync_runs",
+            "topic": channel,
             "event": "phx_join",
             "payload": [
-                "config": [
-                    "broadcast": ["self": false],
-                    "presence": ["key": ""],
-                    "postgres_changes": [
-                        [
-                            "event": "*",
-                            "schema": "public",
-                            "table": "sync_runs"
-                        ]
-                    ]
-                ],
+                "config": config,
                 "access_token": accessToken
             ],
             "ref": "1",
@@ -128,6 +179,21 @@ final class SupabaseRealtimeSyncListener {
         ]
 
         try await socket.send(.string(Self.jsonString(from: payload)))
+    }
+
+    private static func messageObject(from text: String) -> [String: Any]? {
+        try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
+    }
+
+    private static func channelClosed(_ text: String, channel: String) -> Bool {
+        guard let message = messageObject(from: text), message["topic"] as? String == channel else { return false }
+        switch message["event"] as? String {
+        case "phx_error", "phx_close": return true
+        case "phx_reply":
+            return message["ref"] as? String == "1"
+                && (message["payload"] as? [String: Any])?["status"] as? String == "error"
+        default: return false
+        }
     }
 
     private func sendHeartbeat(to socket: URLSessionWebSocketTask) async {
@@ -151,8 +217,7 @@ final class SupabaseRealtimeSyncListener {
 
     private func syncRunEvent(from text: String) -> SupabaseSyncRunEvent? {
         guard
-            let data = text.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let object = Self.messageObject(from: text),
             object["event"] as? String == "postgres_changes",
             let payload = object["payload"] as? [String: Any]
         else {

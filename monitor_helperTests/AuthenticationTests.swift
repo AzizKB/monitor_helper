@@ -187,6 +187,85 @@ struct EmailVerificationFlowTests {
         #expect(AuthURLProtocol.requests().filter { $0.url?.path == "/auth/v1/token" }.count == 1)
     }
 
+    @Test func accessSignalClearsOpenMonitoringBeforeBlockCheckReturns() async throws {
+        let client = client()
+        let storage = TestSessionStorage(session: Self.activeSession)
+        AuthURLProtocol.setResponse {
+            if $0.url?.path.hasSuffix("get_mobile_access_status") == true {
+                return (200, #"[{"status":"approved"}]"#)
+            }
+            return (200, Self.applicationFixture)
+        }
+        let store = MonitoringStore(client: client, sessionStore: storage)
+        await store.bootstrap()
+        await store.refresh()
+        try #require(store.applications.count == 1)
+
+        let (calls, callSignal) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        AuthURLProtocol.setResponse { _ in
+            callSignal.yield(())
+            _ = release.wait(timeout: .now() + 5)
+            return (200, #"[{"status":"blocked"}]"#)
+        }
+        let (changes, changeSignal) = AsyncStream<Void>.makeStream()
+        let listener = Task { await store.observeMobileAccessChanges(changes); callSignal.finish() }
+        changeSignal.yield(())
+        changeSignal.finish()
+        var iterator = calls.makeAsyncIterator()
+        try #require(await iterator.next() != nil)
+
+        #expect(!store.canAccessMonitoring)
+        #expect(store.applications.isEmpty)
+        release.signal()
+        await listener.value
+        #expect(store.accessStatus.decision == .blocked)
+        #expect(store.isAuthenticated)
+    }
+
+    @Test func missedSignalIsCaughtByForegroundPolling() async throws {
+        let client = client()
+        let storage = TestSessionStorage(session: Self.activeSession)
+        AuthURLProtocol.setResponse { _ in (200, #"[{"status":"approved"}]"#) }
+        let store = MonitoringStore(client: client, sessionStore: storage)
+        await store.bootstrap()
+        try #require(store.canAccessMonitoring)
+        AuthURLProtocol.setResponse { _ in (200, #"[{"status":"blocked"}]"#) }
+        let poll = Task { await store.pollMobileAccessWhileActive(interval: .milliseconds(15)) }
+        for _ in 0..<80 {
+            if store.accessStatus.decision == .blocked { break }
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        poll.cancel()
+        await poll.value
+        #expect(store.accessStatus.decision == .blocked)
+        #expect(!store.canAccessMonitoring)
+    }
+
+    @Test func realtimeAccessSignalRequiresCorrectTopicAndEvent() {
+        #expect(SupabaseRealtimeSyncListener.isAccessChangeMessage(
+            #"{"topic":"realtime:mobile-access:own","event":"broadcast","payload":{"event":"access_changed","payload":{}}}"#,
+            channel: "realtime:mobile-access:own"
+        ))
+        #expect(!SupabaseRealtimeSyncListener.isAccessChangeMessage(
+            #"{"topic":"realtime:mobile-access:other","event":"broadcast","payload":{"event":"access_changed"}}"#,
+            channel: "realtime:mobile-access:own"
+        ))
+        #expect(!SupabaseRealtimeSyncListener.isAccessChangeMessage(
+            #"{"topic":"realtime:mobile-access:own","event":"phx_reply","payload":{"event":"access_changed"}}"#,
+            channel: "realtime:mobile-access:own"
+        ))
+    }
+
+    private static var activeSession: StoredSupabaseSession {
+        StoredSupabaseSession(accessToken: "active-token", refreshToken: nil,
+                              expiresAt: .distantFuture, userID: nil, userEmail: nil)
+    }
+
+    nonisolated private static var applicationFixture: String {
+        #"[{"application_id":"00000000-0000-0000-0000-000000000001","application_name":"Monitoring test","display_name":"Monitoring test"}]"#
+    }
+
     private static var expiringSession: StoredSupabaseSession {
         StoredSupabaseSession(accessToken: "before-rotation", refreshToken: "test-refresh",
                               expiresAt: .distantPast, userID: nil, userEmail: nil)
